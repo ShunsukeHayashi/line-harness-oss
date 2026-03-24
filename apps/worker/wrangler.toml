@@ -18,12 +18,12 @@ workers_dev = true
 # ============================================================
 
 [vars]
-LIFF_URL           = "https://liff.line.me/YOUR_LIFF_APP_ID"
-LINE_CHANNEL_ID    = "YOUR_LINE_CHANNEL_ID"
-LINE_LOGIN_CHANNEL_ID = "YOUR_LINE_LOGIN_CHANNEL_ID"
+LIFF_URL           = "https://liff.line.me/2008491323-apEVKQYv"
+LINE_CHANNEL_ID    = "2008348826"
+LINE_LOGIN_CHANNEL_ID = "2008491323"
 # ALLOWED_ORIGINS: 本番環境では管理画面URLをカンマ区切りで設定すること
 # 例: "https://admin.miyabi-line.com,https://your-admin.pages.dev"
-ALLOWED_ORIGINS    = ""
+ALLOWED_ORIGINS    = "https://miyabi-line-admin.pages.dev"
 ENABLE_STEALTH_MODE = "false"
 
 [[d1_databases]]

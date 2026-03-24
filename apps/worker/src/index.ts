@@ -6,6 +6,7 @@ import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { authMiddleware } from './middleware/auth.js';
+import { rateLimitMiddleware } from './middleware/rate-limit.js';
 import { webhook } from './routes/webhook.js';
 import { friends } from './routes/friends.js';
 import { tags } from './routes/tags.js';
@@ -42,16 +43,51 @@ export type Env = {
     LINE_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
+    // Security: comma-separated list of allowed origins (e.g. "https://admin.example.com")
+    // Leave empty to allow all origins (dev only)
+    ALLOWED_ORIGINS: string;
+    // Stealth mode: set to "true" to enable zero-width char insertion (default: disabled)
+    ENABLE_STEALTH_MODE: string;
   };
 };
 
 const app = new Hono<Env>();
 
-// CORS — allow all origins for MVP
-app.use('*', cors({ origin: '*' }));
+// CORS — restrict to ALLOWED_ORIGINS env var (comma-separated list)
+// Leave ALLOWED_ORIGINS empty for dev/local; set explicitly in production
+app.use('*', (c, next) => {
+  const allowedStr = c.env.ALLOWED_ORIGINS ?? '';
+  const allowedList = allowedStr
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Empty list = allow all origins (dev mode); non-empty = strict whitelist
+  const originConfig = allowedList.length > 0 ? allowedList : '*';
+  return cors({
+    origin: originConfig,
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400,
+    credentials: allowedList.length > 0, // credentials only with explicit origins
+  })(c, next);
+});
 
 // Auth middleware — skips /webhook and /docs automatically
 app.use('*', authMiddleware);
+
+// Rate limiting — protects high-risk endpoints from abuse
+app.use(
+  '/api/broadcasts/*',
+  rateLimitMiddleware({ windowMs: 60_000, maxRequests: 10, keyPrefix: 'broadcast' }),
+);
+app.use(
+  '/api/friends/*',
+  rateLimitMiddleware({ windowMs: 60_000, maxRequests: 100, keyPrefix: 'friends' }),
+);
+app.use(
+  '/api/liff/*',
+  rateLimitMiddleware({ windowMs: 60_000, maxRequests: 60, keyPrefix: 'liff' }),
+);
 
 // Mount route groups — MVP & Round 2
 app.route('/', webhook);

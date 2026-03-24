@@ -1,0 +1,25 @@
+Teachable Webhook 登録情報
+==========================
+登録日: 2026-03-25
+
+Webhook URL:
+  https://miyabi-line-crm.supernovasyun.workers.dev/api/webhooks/incoming/a9b4fd73-2353-4a7d-bb62-27dfe891b8de/receive
+
+Secret:
+  d284717d8a294f37aae0ede2170e6a18
+
+選択するイベント:
+  [x] New Sale             (購入・サブスク開始)
+  [x] Subscription Cancelled (解約)
+
+登録場所:
+  Teachable > Settings > Webhooks > Add a new webhook
+
+自動化ルール (LINE Harness 側):
+  購入時: sts:購入済み + sts:受講中 タグ付与 + Member_Onboarding シナリオ開始
+  解約時: sts:解約済み タグ付与 + sts:受講中/購入済み タグ削除
+
+Webhook Endpoint ID: a9b4fd73-2353-4a7d-bb62-27dfe891b8de
+自動化ルールID:
+  購入: 02763d96-03a1-449d-afad-3b9263d9b455
+  解約: 58d49e4a-a177-4323-8d16-f4f1fa7e9647
