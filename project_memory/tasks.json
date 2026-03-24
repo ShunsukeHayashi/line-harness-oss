@@ -58,7 +58,9 @@
       "file": "apps/worker/src/routes/liff.ts:275",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T03"],
+      "depends_on": [
+        "T03"
+      ],
       "estimate_hours": 2,
       "acceptance": "lineUserId のみでは /api/liff/profile からデータ取得不可"
     },
@@ -123,7 +125,12 @@
       "file": "apps/worker/wrangler.toml",
       "agent": "main",
       "node": "Windows Gateway",
-      "depends_on": ["T01", "T02", "T03", "T04"],
+      "depends_on": [
+        "T01",
+        "T02",
+        "T03",
+        "T04"
+      ],
       "estimate_hours": 1,
       "acceptance": "wrangler d1 execute で SELECT 1 が成功する"
     },
@@ -136,7 +143,9 @@
       "file": "docs/setup.md",
       "agent": "main",
       "node": "Windows Gateway",
-      "depends_on": ["T09"],
+      "depends_on": [
+        "T09"
+      ],
       "estimate_hours": 0.5,
       "acceptance": "テスト友だち追加でfriends テーブルに行が挿入される"
     },
@@ -149,7 +158,10 @@
       "file": "packages/sdk/src/workflows.ts",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T09", "T10"],
+      "depends_on": [
+        "T09",
+        "T10"
+      ],
       "estimate_hours": 4,
       "acceptance": "3シナリオが /api/scenarios に登録され、テスト友だちで配信確認"
     },
@@ -162,7 +174,9 @@
       "file": "scripts/migrate-tags.ts (新規)",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T09"],
+      "depends_on": [
+        "T09"
+      ],
       "estimate_hours": 2,
       "acceptance": "GET /api/tags で20件が返る"
     },
@@ -175,7 +189,9 @@
       "file": "apps/worker/src/routes/rich-menus.ts",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T11"],
+      "depends_on": [
+        "T11"
+      ],
       "estimate_hours": 2,
       "acceptance": "購入済みタグが付くとリッチメニューがMemberに切り替わる"
     },
@@ -188,7 +204,10 @@
       "file": "apps/worker/src/routes/webhooks.ts",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T11", "T12"],
+      "depends_on": [
+        "T11",
+        "T12"
+      ],
       "estimate_hours": 3,
       "acceptance": "Teachableのテスト購入でLINE友だちに購入済みタグが自動付与される"
     },
@@ -201,7 +220,12 @@
       "file": "docs/migration-checklist.md",
       "agent": "main",
       "node": "Windows Gateway",
-      "depends_on": ["T11", "T12", "T13", "T14"],
+      "depends_on": [
+        "T11",
+        "T12",
+        "T13",
+        "T14"
+      ],
       "estimate_hours": 8,
       "acceptance": "1週間でのメッセージ配信成功率99%以上、友だちデータの整合性確認"
     },
@@ -214,7 +238,9 @@
       "file": null,
       "agent": "main",
       "node": "Windows Gateway",
-      "depends_on": ["T15"],
+      "depends_on": [
+        "T15"
+      ],
       "estimate_hours": 0.5,
       "acceptance": "L-step解約完了通知メール受信"
     },
@@ -227,7 +253,9 @@
       "file": "dev/platform/_mcp/miyabi-mcp-bundle/src/index.ts",
       "agent": "cc-hayashi",
       "node": "MacBook Pro",
-      "depends_on": ["T09"],
+      "depends_on": [
+        "T09"
+      ],
       "estimate_hours": 8,
       "acceptance": "Claude Codeから「来週セミナー参加者に配信して」でLINEメッセージが送信される"
     },
@@ -240,7 +268,9 @@
       "file": "packages/sdk/src/workflows.test.ts",
       "agent": "cc-hayashi",
       "node": "MacBook Pro",
-      "depends_on": ["T17"],
+      "depends_on": [
+        "T17"
+      ],
       "estimate_hours": 4,
       "acceptance": "5シナリオ全てが自然言語指示で正常動作"
     },
@@ -253,7 +283,9 @@
       "file": "apps/web/app/landing/page.tsx (新規)",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T16"],
+      "depends_on": [
+        "T16"
+      ],
       "estimate_hours": 16,
       "acceptance": "LP公開。Google Lighthouse Score 90以上"
     },
@@ -266,7 +298,10 @@
       "file": "apps/worker/src/routes/stripe.ts",
       "agent": "kotowari-dev",
       "node": "MacBook Pro",
-      "depends_on": ["T05", "T19"],
+      "depends_on": [
+        "T05",
+        "T19"
+      ],
       "estimate_hours": 12,
       "acceptance": "Stripeテストカードでの課金・解約フローが完結"
     },
@@ -279,9 +314,30 @@
       "file": null,
       "agent": "sns-creator",
       "node": "MainMini",
-      "depends_on": ["T19", "T20"],
+      "depends_on": [
+        "T19",
+        "T20"
+      ],
       "estimate_hours": 2,
       "acceptance": "50社へのβ案内完了。興味表明10社以上でフルローンチ判断"
     }
+  ],
+  "completed_tasks": [
+    "T01",
+    "T02",
+    "T03",
+    "T04",
+    "T05",
+    "T06",
+    "T07",
+    "T08",
+    "T09",
+    "T11",
+    "T12",
+    "T14",
+    "T17",
+    "T18",
+    "T19",
+    "T20"
   ]
 }
