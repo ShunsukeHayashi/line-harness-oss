@@ -1,15 +1,35 @@
-name = "line-crm-worker"
+name = "miyabi-line-crm"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 workers_dev = true
 
-# API_KEY is set via `wrangler secret put API_KEY`
-# Do NOT hardcode secrets here
+# ============================================================
+# PPAL向け設定
+# ------------------------------------------------------------
+# Secrets (set via `wrangler secret put`):
+#   wrangler secret put API_KEY
+#   wrangler secret put LINE_CHANNEL_SECRET
+#   wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+#   wrangler secret put LINE_LOGIN_CHANNEL_SECRET
+#
+# Plain vars (set here or via Dashboard):
+#   ALLOWED_ORIGINS — 管理画面のオリジン。例: "https://admin.yoursite.com"
+#   ENABLE_STEALTH_MODE — "true" でゼロ幅文字挿入ON（デフォルト: 無効）
+# ============================================================
+
+[vars]
+LIFF_URL           = "https://liff.line.me/YOUR_LIFF_APP_ID"
+LINE_CHANNEL_ID    = "YOUR_LINE_CHANNEL_ID"
+LINE_LOGIN_CHANNEL_ID = "YOUR_LINE_LOGIN_CHANNEL_ID"
+# ALLOWED_ORIGINS: 本番環境では管理画面URLをカンマ区切りで設定すること
+# 例: "https://admin.miyabi-line.com,https://your-admin.pages.dev"
+ALLOWED_ORIGINS    = ""
+ENABLE_STEALTH_MODE = "false"
 
 [[d1_databases]]
-binding = "DB"
-database_name = "line-crm"
-database_id = "YOUR_D1_DATABASE_ID"
+binding      = "DB"
+database_name = "miyabi-line-crm"
+database_id  = "2b9355ee-ddef-45d1-bca1-06a0a029ff83"
 
 [triggers]
 crons = ["*/5 * * * *"]
