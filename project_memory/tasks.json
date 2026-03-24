@@ -242,7 +242,7 @@
       ],
       "estimate_hours": 8,
       "acceptance": "1週間でのメッセージ配信成功率99%以上、友だちデータの整合性確認",
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": "T16",
@@ -258,7 +258,7 @@
       ],
       "estimate_hours": 0.5,
       "acceptance": "L-step解約完了通知メール受信",
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": "T17",
@@ -361,6 +361,8 @@
     "T17",
     "T18",
     "T19",
-    "T20"
+    "T20",
+    "T15",
+    "T16"
   ]
 }
