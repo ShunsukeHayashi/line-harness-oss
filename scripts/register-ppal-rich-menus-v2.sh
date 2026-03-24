@@ -9,9 +9,9 @@ set -e
 
 BASE_URL="${WORKER_URL:-https://miyabi-line-crm.supernovasyun.workers.dev}"
 API_KEY="${LINE_CRM_API_KEY:-miyabi-ppal-5e5be18c9f2d90aba4a5203b184171da}"
-IMAGE_DIR="$(cd "$(dirname "$0")/../" && pwd)/../products/PPAL/L-Step-Setup/assets/generated-images/richmenu"
+IMAGE_DIR="${PPAL_IMAGE_DIR:-$(cd "$(dirname "$0")/../../products/PPAL/L-Step-Setup/assets/generated-images/richmenu" 2>/dev/null && pwd || echo "/Users/shunsukehayashi/dev/products/PPAL/L-Step-Setup/assets/generated-images/richmenu")}"
 
-AUTH_HEADER="x-api-key: ${API_KEY}"
+AUTH_HEADER="Authorization: Bearer ${API_KEY}"
 
 echo "=== PPAL リッチメニュー v2 セットアップ ==="
 echo "Worker: ${BASE_URL}"
@@ -57,7 +57,7 @@ upload_image() {
 # =============================================================================
 echo "--- Step 1: 既存 PPAL メニュー削除 ---"
 
-EXISTING=$(api_get "/api/rich-menus" | jq -r '.[] | select(.name | startswith("PPAL_")) | .id' 2>/dev/null || echo "")
+EXISTING=$(api_get "/api/rich-menus" | jq -r '.data[] | select(.name | startswith("PPAL_")) | .richMenuId' 2>/dev/null || echo "")
 if [ -n "$EXISTING" ]; then
   for menu_id in $EXISTING; do
     echo "  削除: ${menu_id}"
@@ -77,13 +77,13 @@ create_tag_if_not_exists() {
   local name="$1"
   local color="$2"
   # 既存チェック
-  EXISTING_TAG=$(api_get "/api/tags" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id' 2>/dev/null || echo "")
+  EXISTING_TAG=$(api_get "/api/tags" | jq -r --arg n "$name" '.data[] | select(.name == $n) | .id' 2>/dev/null || echo "")
   if [ -n "$EXISTING_TAG" ]; then
     echo "  既存タグ: ${name} (${EXISTING_TAG})"
     echo "$EXISTING_TAG"
   else
     RESULT=$(api_post "/api/tags" "{\"name\":\"${name}\",\"color\":\"${color}\"}")
-    TAG_ID=$(echo "$RESULT" | jq -r '.id')
+    TAG_ID=$(echo "$RESULT" | jq -r '.data.id // .id')
     echo "  作成: ${name} (${TAG_ID})"
     echo "$TAG_ID"
   fi
@@ -141,7 +141,7 @@ EOF
 )
 
 GUEST_RESULT=$(api_post "/api/rich-menus" "$GUEST_BODY")
-GUEST_ID=$(echo "$GUEST_RESULT" | jq -r '.richMenuId // .id')
+GUEST_ID=$(echo "$GUEST_RESULT" | jq -r '.data.richMenuId // .richMenuId // .data.id // .id')
 echo "  Guest Menu ID: ${GUEST_ID}"
 upload_image "$GUEST_ID" "${IMAGE_DIR}/richmenu_guest.jpg"
 echo ""
@@ -173,7 +173,7 @@ EOF
 )
 
 STAGE0_RESULT=$(api_post "/api/rich-menus" "$STAGE0_BODY")
-STAGE0_ID=$(echo "$STAGE0_RESULT" | jq -r '.richMenuId // .id')
+STAGE0_ID=$(echo "$STAGE0_RESULT" | jq -r '.data.richMenuId // .richMenuId // .data.id // .id')
 echo "  Stage0 Menu ID: ${STAGE0_ID}"
 upload_image "$STAGE0_ID" "${IMAGE_DIR}/richmenu_stage0.jpg"
 echo ""
@@ -204,7 +204,7 @@ EOF
 )
 
 STAGE1_RESULT=$(api_post "/api/rich-menus" "$STAGE1_BODY")
-STAGE1_ID=$(echo "$STAGE1_RESULT" | jq -r '.richMenuId // .id')
+STAGE1_ID=$(echo "$STAGE1_RESULT" | jq -r '.data.richMenuId // .richMenuId // .data.id // .id')
 echo "  Stage1 Menu ID: ${STAGE1_ID}"
 upload_image "$STAGE1_ID" "${IMAGE_DIR}/richmenu_stage1.jpg"
 echo ""
@@ -251,7 +251,7 @@ EOF
 )
 
 STAGE2_RESULT=$(api_post "/api/rich-menus" "$STAGE2_BODY")
-STAGE2_ID=$(echo "$STAGE2_RESULT" | jq -r '.richMenuId // .id')
+STAGE2_ID=$(echo "$STAGE2_RESULT" | jq -r '.data.richMenuId // .richMenuId // .data.id // .id')
 echo "  Stage2 Menu ID: ${STAGE2_ID}"
 upload_image "$STAGE2_ID" "${IMAGE_DIR}/richmenu_stage2.jpg"
 echo ""
@@ -270,7 +270,7 @@ echo "--- Step 8: オートメーション作成 ---"
 
 # 既存 PPAL オートメーション削除
 echo "  既存 PPAL オートメーション削除..."
-EXISTING_AUTOS=$(api_get "/api/automations" | jq -r '.[] | select(.name | startswith("PPAL_")) | .id' 2>/dev/null || echo "")
+EXISTING_AUTOS=$(api_get "/api/automations" | jq -r '.data[] | select(.name | startswith("PPAL_")) | .id' 2>/dev/null || echo "")
 for auto_id in $EXISTING_AUTOS; do
   echo "  削除: ${auto_id}"
   api_delete "/api/automations/${auto_id}" | jq -r '.status // "deleted"'
@@ -286,7 +286,7 @@ AUTO1=$(api_post "/api/automations" "{
   \"priority\": 10,
   \"is_active\": true
 }")
-echo "  ID: $(echo $AUTO1 | jq -r '.id')"
+echo "  ID: $(echo $AUTO1 | jq -r '.data.id // .id')"
 
 # Automation 2: Onboarding:Step0_Clicked → Stage1 メニューに切替
 echo "  作成: Onboarding:Step0_Clicked → Stage1"
@@ -298,7 +298,7 @@ AUTO2=$(api_post "/api/automations" "{
   \"priority\": 10,
   \"is_active\": true
 }")
-echo "  ID: $(echo $AUTO2 | jq -r '.id')"
+echo "  ID: $(echo $AUTO2 | jq -r '.data.id // .id')"
 
 # Automation 3: lesson_week1_complete → Stage2 メニューに切替
 echo "  作成: lesson_week1_complete → Stage2"
@@ -310,7 +310,7 @@ AUTO3=$(api_post "/api/automations" "{
   \"priority\": 10,
   \"is_active\": true
 }")
-echo "  ID: $(echo $AUTO3 | jq -r '.id')"
+echo "  ID: $(echo $AUTO3 | jq -r '.data.id // .id')"
 echo ""
 
 # =============================================================================
