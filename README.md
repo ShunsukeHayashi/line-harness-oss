@@ -271,6 +271,11 @@ Issues and PRs are welcome. Please read the [Wiki](https://github.com/ShunsukeHa
 
 ---
 
+## Credits
+
+This project is a fork of [line-harness-oss](https://github.com/Shudesu/line-harness-oss) by [Shudesu](https://github.com/Shudesu).
+Fork enhancements (PPAL migration, security hardening, MCP integration) by [ShunsukeHayashi](https://github.com/ShunsukeHayashi).
+
 ## License
 
-MIT
+MIT — Copyright (c) 2026 Shudesu, ShunsukeHayashi. See [LICENSE](./LICENSE) for details.
