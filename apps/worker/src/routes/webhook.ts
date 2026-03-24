@@ -279,6 +279,31 @@ async function handleEvent(
     const params = new URLSearchParams(postbackEvent.postback.data);
     const action = params.get('action');
 
+    // セグメントアンケート回答（Welcomeシーケンス Step1 ボタン）
+    if (action === 'segment') {
+      const value = params.get('value'); // 'tech' or 'biz'
+      const allTags = await getTags(db);
+      const tagName = value === 'tech' ? 'Seg:Tech_Interest' : value === 'biz' ? 'Seg:Biz_Result' : null;
+      const tag = tagName ? allTags.find((t) => t.name === tagName) : null;
+      if (tag) {
+        try {
+          await addTagToFriend(db, friend.id, tag.id);
+          await fireEvent(db, 'tag_change', { friendId: friend.id, eventData: { tagId: tag.id, action: 'add' } }, lineAccessToken);
+        } catch (err) {
+          console.error('Failed to add segment tag', err);
+        }
+      }
+      const replyText = value === 'tech'
+        ? '開発・コーディング系として登録しました！🖥️\n\nClaude Code / MCPの実践情報をお届けします。\n\n▶ PPALラボを詳しく見る\nhttps://shuhayas-s-school.teachable.com/p/pro-prompt-agent-lab'
+        : '業務・営業の自動化として登録しました！💼\n\n業務効率化・営業自動化のAI活用情報をお届けします。\n\n▶ PPALラボを詳しく見る\nhttps://shuhayas-s-school.teachable.com/p/pro-prompt-agent-lab';
+      try {
+        await lineClient.replyMessage(postbackEvent.replyToken, [{ type: 'text', text: replyText }]);
+      } catch (err) {
+        console.error('Failed to reply for segment postback', err);
+      }
+      return;
+    }
+
     // Stage0 リッチメニュー「講座にアクセス」ボタンタップ
     // → Onboarding:Step0_Clicked タグ付与 → オートメーションがStage1へ切替
     if (action === 'rm_stage0_course') {
