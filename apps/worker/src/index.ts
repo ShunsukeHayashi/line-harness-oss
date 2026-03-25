@@ -34,6 +34,7 @@ import { richMenus } from './routes/rich-menus.js';
 import { trackedLinks } from './routes/tracked-links.js';
 import { forms } from './routes/forms.js';
 import { betaFeedback } from './routes/beta-feedback.js';
+import { ai } from './routes/ai.js';
 
 export type Env = {
   Bindings: {
@@ -54,6 +55,8 @@ export type Env = {
     // Set with: wrangler secret put GITHUB_TOKEN / GITHUB_REPO
     GITHUB_TOKEN: string;
     GITHUB_REPO: string; // e.g. "ShunsukeHayashi/line-harness-oss"
+    // Claude AI integration
+    ANTHROPIC_API_KEY: string;
   };
 };
 
@@ -123,6 +126,7 @@ app.route('/', richMenus);
 app.route('/', trackedLinks);
 app.route('/', forms);
 app.route('/', betaFeedback);
+app.route('/', ai);
 
 // 404 fallback
 app.notFound((c) => c.json({ success: false, error: 'Not found' }, 404));
