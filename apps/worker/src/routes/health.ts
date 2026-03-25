@@ -8,8 +8,15 @@ import {
   updateAccountMigration,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import packageJson from '../../package.json';
 
 const health = new Hono<Env>();
+
+// ========== システムヘルスチェック ==========
+
+health.get('/health', (c) => {
+  return c.json({ status: 'ok', version: packageJson.version });
+});
 
 // ========== アカウントヘルス ==========
 
