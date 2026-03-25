@@ -39,12 +39,21 @@ jobs:
         if: steps.check.outputs.result == 'no'
         uses: actions/github-script@v7
         with:
-          # GITHUB_TOKEN には Copilot 権限がないため COPILOT_PAT を使用
-          # PAT 作成方法: Settings → Developer settings → Fine-grained tokens
-          #   → Repository: line-harness-oss → Permissions: Copilot: Read and write
-          github-token: ${{ secrets.COPILOT_PAT }}
+          # GITHUB_TOKEN で動作（COPILOT_PAT 不要）
+          # 修正: agentAssignment.targetRepositoryId が必須。ないと silent fail する。
           script: |
             const issueNodeId = context.payload.issue.node_id;
+
+            // リポジトリの Node ID を取得（agentAssignment に必須）
+            const repoData = await github.graphql(`
+              query GetRepoId($owner: String!, $name: String!) {
+                repository(owner: $owner, name: $name) { id }
+              }
+            `, {
+              owner: context.repo.owner,
+              name: context.repo.repo,
+            });
+            const repoId = repoData.repository.id;
 
             await github.graphql(`
               mutation AssignCopilot($input: ReplaceActorsForAssignableInput!) {
@@ -57,12 +66,13 @@ jobs:
             `, {
               input: {
                 assignableId: issueNodeId,
-                actorLogins: [],      // 空配列必須（バリデーション要件）
+                actorLogins: [],
                 agentAssignment: {
+                  targetRepositoryId: repoId,   // 必須: これがないと Copilot が起動しない
                   baseRef: 'main',
                   customInstructions: '',
                 },
               },
             });
 
-            console.log(`Assigned Copilot Coding Agent to #${context.issue.number}`);
+            console.log(`✅ Copilot Coding Agent assigned to #${context.issue.number}`);

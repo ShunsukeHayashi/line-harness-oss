@@ -1,0 +1,50 @@
+name: Auto-merge Copilot PRs
+
+# Copilot Coding Agent が作成した PR が CI 通過したら自動マージ
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+  check_suite:
+    types: [completed]
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge for Copilot PRs
+    runs-on: ubuntu-latest
+    # Copilot が作成した PR のみ対象
+    if: |
+      github.event_name == 'pull_request' &&
+      github.actor == 'Copilot' &&
+      github.event.pull_request.draft == false
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Enable auto-merge (squash)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              merge_method: 'squash',
+            }).catch(async err => {
+              if (err.status === 405) {
+                // CI がまだ通っていない場合は auto-merge を有効化
+                await github.graphql(`
+                  mutation EnableAutoMerge($prId: ID!) {
+                    enablePullRequestAutoMerge(input: {
+                      pullRequestId: $prId
+                      mergeMethod: SQUASH
+                    }) {
+                      pullRequest { number state }
+                    }
+                  }
+                `, { prId: context.payload.pull_request.node_id });
+                console.log(`✅ Auto-merge enabled for PR #${context.payload.pull_request.number}`);
+              } else {
+                throw err;
+              }
+            });
