@@ -19,6 +19,7 @@ import {
   removeTagFromFriend,
   enrollFriendInScenario,
   jstNow,
+  getFriendScore,
 } from '@line-crm/db';
 import { LineClient } from '@line-crm/line-sdk';
 
@@ -29,6 +30,11 @@ interface EventPayload {
 
 /**
  * イベントを発火し、登録された全ハンドラーを実行
+ *
+ * 2フェーズ実行でscore_threshold条件を正しく評価する:
+ *   Phase1: webhooks + scoring（並列）
+ *   ↓ currentScore を eventData に注入
+ *   Phase2: automations + notifications（currentScore 参照可能）
  */
 export async function fireEvent(
   db: D1Database,
@@ -36,9 +42,21 @@ export async function fireEvent(
   payload: EventPayload,
   lineAccessToken?: string,
 ): Promise<void> {
+  // Phase1: Webhook通知とスコアリングを並列実行
   await Promise.allSettled([
     fireOutgoingWebhooks(db, eventType, payload),
     processScoring(db, eventType, payload),
+  ]);
+
+  // スコアリング完了後、最新スコアをpayloadに注入
+  // これによりPhase2のautomationsでscore_threshold条件が正しく評価される
+  if (payload.friendId) {
+    const currentScore = await getFriendScore(db, payload.friendId);
+    payload.eventData = { ...payload.eventData, currentScore };
+  }
+
+  // Phase2: スコア注入済みのpayloadでautomationsとnotificationsを実行
+  await Promise.allSettled([
     processAutomations(db, eventType, payload, lineAccessToken),
     processNotifications(db, eventType, payload),
   ]);
