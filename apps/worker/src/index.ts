@@ -34,6 +34,7 @@ import { richMenus } from './routes/rich-menus.js';
 import { trackedLinks } from './routes/tracked-links.js';
 import { forms } from './routes/forms.js';
 import { betaFeedback } from './routes/beta-feedback.js';
+import { aiSettings } from './routes/ai-settings.js';
 import { ai } from './routes/ai.js';
 
 export type Env = {
@@ -57,6 +58,8 @@ export type Env = {
     GITHUB_REPO: string; // e.g. "ShunsukeHayashi/line-harness-oss"
     // Claude AI integration
     ANTHROPIC_API_KEY: string;
+    // AI auto-reply system prompt (overridden by DB setting when set)
+    AI_SYSTEM_PROMPT: string;
   };
 };
 
@@ -126,6 +129,7 @@ app.route('/', richMenus);
 app.route('/', trackedLinks);
 app.route('/', forms);
 app.route('/', betaFeedback);
+app.route('/', aiSettings);
 app.route('/', ai);
 
 // 404 fallback

@@ -22,6 +22,7 @@ import type {
   Notification,
   AccountHealthLog,
   AccountMigration,
+  AiSettings,
 } from '@line-crm/shared'
 
 import type { Broadcast } from '@line-crm/shared'
@@ -457,5 +458,14 @@ export const api = {
       }),
     getMigration: (migrationId: string) =>
       fetchApi<ApiResponse<AccountMigration>>(`/api/accounts/migrations/${migrationId}`),
+  },
+  aiSettings: {
+    get: () =>
+      fetchApi<ApiResponse<AiSettings>>('/api/ai-settings'),
+    update: (data: { isEnabled: boolean; systemPrompt?: string | null; model?: string }) =>
+      fetchApi<ApiResponse<AiSettings>>('/api/ai-settings', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
   },
 }

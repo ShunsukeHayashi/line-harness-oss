@@ -14,9 +14,11 @@ import {
   addTagToFriend,
   getTags,
   jstNow,
+  getAiSettings,
 } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
+import { callClaudeAutoReply, resolveSystemPrompt } from '../services/ai-auto-reply.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -46,10 +48,14 @@ webhook.post('/webhook', async (c) => {
 
   // 非同期処理 — LINE は ~1s 以内のレスポンスを要求
   const lineAccessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const aiConfig = {
+    apiKey: (c.env as { ANTHROPIC_API_KEY?: string }).ANTHROPIC_API_KEY,
+    systemPromptEnv: (c.env as { AI_SYSTEM_PROMPT?: string }).AI_SYSTEM_PROMPT,
+  };
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, lineAccessToken);
+        await handleEvent(db, lineClient, event, lineAccessToken, aiConfig);
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -66,6 +72,7 @@ async function handleEvent(
   lineClient: LineClient,
   event: WebhookEvent,
   lineAccessToken: string,
+  aiConfig?: { apiKey?: string; systemPromptEnv?: string },
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -255,6 +262,37 @@ async function handleEvent(
 
         matched = true;
         break;
+      }
+    }
+
+    // AI自動応答 — キーワードルール未マッチかつANTHROPIC_API_KEY設定済みの場合
+    if (!matched && aiConfig?.apiKey) {
+      try {
+        const aiRow = await getAiSettings(db);
+        if (aiRow && aiRow.is_enabled === 1) {
+          const systemPrompt = resolveSystemPrompt(aiRow.system_prompt, aiConfig.systemPromptEnv);
+          const result = await callClaudeAutoReply({
+            apiKey: aiConfig.apiKey,
+            model: aiRow.model,
+            systemPrompt,
+            userMessage: incomingText,
+          });
+          await lineClient.replyMessage(event.replyToken, [
+            { type: 'text', text: result.text },
+          ]);
+
+          // 送信ログ
+          const aiLogId = crypto.randomUUID();
+          await db
+            .prepare(
+              `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
+               VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, ?)`,
+            )
+            .bind(aiLogId, friend.id, result.text, jstNow())
+            .run();
+        }
+      } catch (err) {
+        console.error('Failed to send AI auto-reply', err);
       }
     }
 
