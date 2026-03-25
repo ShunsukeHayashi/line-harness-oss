@@ -10,3 +10,6 @@ dist/
 .env.production
 .env.staging
 apps/web/out/
+.env.local
+apps/worker/.dev.vars
+.gitnexus/

@@ -564,7 +564,8 @@
       "depends_on": [],
       "estimate_hours": 0.5,
       "acceptance": "https://line-harness-admin.pages.dev/landing が200を返し、日本語LPが表示される",
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-25"
     },
     {
       "id": "T36",
@@ -735,6 +736,7 @@
     "T19",
     "T20",
     "T22",
-    "T25"
+    "T25",
+    "T35"
   ]
 }

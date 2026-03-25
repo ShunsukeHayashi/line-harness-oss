@@ -123,6 +123,86 @@ TELEGRAM_BOT_TOKEN         # 通知（任意）
 TELEGRAM_CHAT_ID
 ```
 
+## 実装フロー（必須）— Claude Code はコードを書かない
+
+**このプロジェクトでは Claude Code が `apps/` や `packages/` のコードを直接書くことを禁止する。**
+新機能・バグ修正はすべて以下のパイプラインに通す。
+
+```
+Claude Code (要件定義・Issue作成)
+  → Copilot Coding Agent (自動実装・Draft PR)
+    → CI: pnpm -r build + typecheck
+      → Claude Opus 4.6 AI レビュー
+        → 自動 squash merge
+```
+
+### パイプライン起動コマンド（1コマンドで完了）
+
+```bash
+gh issue create \
+  --repo ShunsukeHayashi/line-harness-oss \
+  --title "[auto] feat: {機能の概要}" \
+  --label "copilot,auto" \
+  --body "## やりたいこと
+{1行の概要}
+
+## 要件
+- {具体的な要件1}
+- {具体的な要件2}
+
+## 対象ファイル（わかる場合）
+- \`apps/worker/src/routes/...\`
+
+## 完了条件
+- [ ] pnpm -r build が通る
+- [ ] {動作確認の条件}"
+```
+
+**ラベルは必ず `copilot,auto` を両方付けること。**
+
+### パイプライン vs 直接実装の判断
+
+| ケース | 対応 |
+|--------|------|
+| 新機能・バグ修正・テスト追加・リファクタリング | **パイプライン（デフォルト）** |
+| `.github/workflows/` の変更 | Claude Code が直接実施（Security Gate回避） |
+| セキュリティ修正（シークレット・認証） | Claude Code が直接実施 |
+| `git merge upstream/main` | Claude Code が直接実施 |
+| `pnpm db:migrate` 実行 | 手動（SQL確認後） |
+| 緊急ホットフィックス（5分以内） | Claude Code が直接実施 |
+
+### よい Issue の書き方
+
+```
+## やりたいこと
+友だち一覧APIにページネーションを追加する
+
+## 要件
+- GET /api/friends に page と limit クエリパラメータを追加（デフォルト: page=1, limit=20）
+- レスポンスに { data, total, page, limit, hasNext } を含める
+- apps/worker/src/routes/friends.ts を修正
+- D1クエリに LIMIT/OFFSET を使う
+
+## 完了条件
+- [ ] pnpm -r build が通る
+- [ ] GET /api/friends?page=2&limit=10 が正しいデータを返す
+```
+
+### パイプライン確認コマンド
+
+```bash
+# PR 一覧
+gh pr list --repo ShunsukeHayashi/line-harness-oss
+
+# CI 状態
+gh pr checks {PR番号} --repo ShunsukeHayashi/line-harness-oss
+
+# Copilot が動いていない場合 → ラベルを付け直す
+gh issue edit {ISSUE番号} --add-label "copilot" --repo ShunsukeHayashi/line-harness-oss
+```
+
+---
+
 ## GitHub ワークフロー（自動パイプライン）
 
 1. Issue作成 → `@copilot` アサイン → Copilot が Draft PR 作成
