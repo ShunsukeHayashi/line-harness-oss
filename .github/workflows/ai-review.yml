@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     # Copilot PR または ai-review ラベル付き PR が対象
     if: |
-      github.actor == 'Copilot' ||
+      github.event.pull_request.user.login == 'Copilot' ||
       contains(github.event.pull_request.labels.*.name, 'ai-review')
     permissions:
       pull-requests: write
