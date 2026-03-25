@@ -1,8 +1,15 @@
 # LINE Harness OSS — コントリビューションルール
-# MANDATORY: PR作成前に必ずこのファイルを参照すること
+# ⛔ UPSTREAM PR 提出は永久停止（2026-03-25 オーナー決定）
 
-**Version**: 1.0.0
+**Version**: 1.1.0
 **作成日**: 2026-03-25
+
+## 🚫 upstream (Shudesu/line-harness-oss) への PR 提出は禁止
+
+オーナー判断により、upstream への PR 提出は一切行わない。
+理由: 混乱リスクが高い。このフォークは独自開発専用として運用する。
+
+このフォーク (ShunsukeHayashi/line-harness-oss) は**完全独立運用**とする。
 **優先度**: P0（絶対遵守）
 
 ---
