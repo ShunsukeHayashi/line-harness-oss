@@ -5,6 +5,7 @@ import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
+import { refreshLineAccessTokens } from './services/token-refresh.js';
 import { authMiddleware } from './middleware/auth.js';
 import { rateLimitMiddleware } from './middleware/rate-limit.js';
 import { webhook } from './routes/webhook.js';
@@ -139,6 +140,7 @@ async function scheduled(
     processScheduledBroadcasts(env.DB, lineClient),
     processReminderDeliveries(env.DB, lineClient),
     checkAccountHealth(env.DB),
+    refreshLineAccessTokens(env.DB),
   ]);
 }
 
