@@ -2,6 +2,7 @@ name: AI Code Review
 
 # Copilot が作成した PR を Claude Opus で自動レビュー。
 # APPROVE されたものだけ auto-merge.yml がマージする。
+# 3アカウントのトークンローテーションに対応（レートリミット時に次のキーへフォールバック）
 
 on:
   pull_request:
@@ -33,7 +34,9 @@ jobs:
       - name: Claude Opus AI Review
         uses: actions/github-script@v7
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY_2: ${{ secrets.ANTHROPIC_API_KEY_2 }}
+          ANTHROPIC_API_KEY_3: ${{ secrets.ANTHROPIC_API_KEY_3 }}
         with:
           script: |
             const fs = require('fs');
@@ -46,65 +49,104 @@ jobs:
 
             const pr = context.payload.pull_request;
 
-            const systemPrompt = `You are a principal engineer reviewing code for "miyabi-line" (line-harness-oss).
-Stack: Cloudflare Workers (Hono) + D1 (SQLite) + Next.js 15 + TypeScript strict + LIFF.
-Rules:
-- NO Node.js APIs in Workers (no fs, path, buffer, etc.)
-- D1 queries must use prepared statements (.prepare().bind())
-- TypeScript: no 'any', no implicit any, proper return types
-- Hono route handlers must validate all input
-- SQL: no raw string interpolation (SQLi prevention)
-- Never expose internal errors to LINE users`;
+            // Multi-line strings as arrays to avoid YAML indentation issues
+            const systemPrompt = [
+              'You are a principal engineer reviewing code for "miyabi-line" (line-harness-oss).',
+              'Stack: Cloudflare Workers (Hono) + D1 (SQLite) + Next.js 15 + TypeScript strict + LIFF.',
+              'Rules:',
+              '- NO Node.js APIs in Workers (no fs, path, buffer, etc.)',
+              '- D1 queries must use prepared statements (.prepare().bind())',
+              '- TypeScript: no "any", no implicit any, proper return types',
+              '- Hono route handlers must validate all input',
+              '- SQL: no raw string interpolation (SQLi prevention)',
+              '- Never expose internal errors to LINE users',
+            ].join('\n');
 
-            const userPrompt = `PR #${pr.number}: ${pr.title}
-Branch: ${pr.head.ref}
+            const userPrompt = [
+              `PR #${pr.number}: ${pr.title}`,
+              `Branch: ${pr.head.ref}`,
+              '',
+              '## Diff:',
+              '```diff',
+              diff,
+              '```',
+              '',
+              'Review this change against the rules above. Your output MUST follow this exact format:',
+              '',
+              '## Verdict',
+              '**[APPROVE]** <- write exactly this if production-ready',
+              'OR',
+              '**[REQUEST_CHANGES]** <- write exactly this if issues found',
+              '',
+              '## Summary',
+              '(2-3 sentences, plain language)',
+              '',
+              '## Findings',
+              '(use: OK good  WARNING warning  CRITICAL critical)',
+              '',
+              '## Required Changes',
+              '(numbered list -- only if REQUEST_CHANGES; write "None" if APPROVE)',
+              '',
+              'Be strict. Only APPROVE if the code is genuinely safe and correct for production Cloudflare Workers.',
+            ].join('\n');
 
-## Diff:
-\`\`\`diff
-${diff}
-\`\`\`
+            // ── 3アカウントのトークンローテーション対応 ──────────────────
+            // 429 (rate limit) または 401 (token expired) の場合、次のキーへフォールバック
+            const apiKeys = [
+              process.env.ANTHROPIC_API_KEY,
+              process.env.ANTHROPIC_API_KEY_2,
+              process.env.ANTHROPIC_API_KEY_3,
+            ].filter(Boolean);
 
-Review this change against the rules above. Your output MUST follow this exact format:
+            let review = null;
+            let usedKeyIndex = -1;
 
-## Verdict
-**[APPROVE]** <- write exactly this if production-ready
-OR
-**[REQUEST_CHANGES]** <- write exactly this if issues found
+            for (let i = 0; i < apiKeys.length; i++) {
+              const apiKey = apiKeys[i];
+              console.log(`Trying API key ${i + 1}/${apiKeys.length}...`);
 
-## Summary
-(2-3 sentences, plain language)
+              const response = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                  'x-api-key': apiKey,
+                  'anthropic-version': '2023-06-01',
+                  'content-type': 'application/json',
+                },
+                body: JSON.stringify({
+                  model: 'claude-opus-4-6',
+                  max_tokens: 2048,
+                  system: systemPrompt,
+                  messages: [{ role: 'user', content: userPrompt }],
+                }),
+              });
 
-## Findings
-(use: OK good  WARNING warning  CRITICAL critical)
+              if (response.ok) {
+                const data = await response.json();
+                review = data.content[0].text;
+                usedKeyIndex = i + 1;
+                console.log(`Success with API key ${usedKeyIndex}`);
+                break;
+              }
 
-## Required Changes
-(numbered list -- only if REQUEST_CHANGES; write "None" if APPROVE)
-
-Be strict. Only APPROVE if the code is genuinely safe and correct for production Cloudflare Workers.`;
-
-            // Claude Opus API call
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
-              method: 'POST',
-              headers: {
-                'x-api-key': process.env.ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify({
-                model: 'claude-opus-4-6',
-                max_tokens: 2048,
-                system: systemPrompt,
-                messages: [{ role: 'user', content: userPrompt }],
-              }),
-            });
-
-            if (!response.ok) {
+              const status = response.status;
               const errText = await response.text();
-              throw new Error(`Claude API ${response.status}: ${errText}`);
+              console.log(`API key ${i + 1} failed: HTTP ${status} - ${errText.substring(0, 200)}`);
+
+              if (status === 429 || status === 401) {
+                // Rate limit or expired token — try next key
+                if (i < apiKeys.length - 1) {
+                  console.log(`Falling back to API key ${i + 2}...`);
+                  continue;
+                }
+              }
+
+              // Non-retryable error
+              throw new Error(`Claude API ${status}: ${errText}`);
             }
 
-            const data = await response.json();
-            const review = data.content[0].text;
+            if (!review) {
+              throw new Error('All API keys exhausted or rate-limited. Please check secret configuration.');
+            }
 
             // Determine verdict
             const isApprove = /\*\*\[APPROVE\]\*\*/.test(review);
@@ -116,7 +158,7 @@ Be strict. Only APPROVE if the code is genuinely safe and correct for production
               review,
               '',
               '---',
-              `_Model: claude-opus-4-6 | Diff: ${truncated ? 'truncated' : 'full'} | PR: #${pr.number}_`,
+              `_Model: claude-opus-4-6 | Diff: ${truncated ? 'truncated' : 'full'} | PR: #${pr.number} | Key: #${usedKeyIndex}_`,
             ].join('\n');
 
             // Post review to PR
@@ -128,7 +170,7 @@ Be strict. Only APPROVE if the code is genuinely safe and correct for production
               body,
             });
 
-            console.log(`Posted ${event} review for PR #${pr.number}`);
+            console.log(`Posted ${event} review for PR #${pr.number} (used key #${usedKeyIndex})`);
 
             // If REQUEST_CHANGES, fail the job to block auto-merge
             if (event === 'REQUEST_CHANGES') {
