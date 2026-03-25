@@ -2,7 +2,7 @@ name: AI Code Review
 
 # Copilot が作成した PR を Claude Opus で自動レビュー。
 # APPROVE されたものだけ auto-merge.yml がマージする。
-# 3アカウントのトークンローテーションに対応（レートリミット時に次のキーへフォールバック）
+# Claude Code CLI（claude --print）+ OAuth トークンローテーションで動作。
 
 on:
   pull_request:
@@ -13,7 +13,6 @@ jobs:
   ai-review:
     name: Claude Opus Review
     runs-on: ubuntu-latest
-    # Copilot PR または ai-review ラベル付き PR が対象
     if: |
       github.event.pull_request.user.login == 'Copilot' ||
       contains(github.event.pull_request.labels.*.name, 'ai-review')
@@ -25,143 +24,147 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install claude CLI
+        run: npm install -g @anthropic-ai/claude-code@latest
+
       - name: Get PR diff
         run: |
           git fetch origin main
           git diff origin/main...HEAD > /tmp/pr.diff
-          echo "Diff size: $(wc -c < /tmp/pr.diff) bytes, $(wc -l < /tmp/pr.diff) lines"
+          LINES=$(wc -l < /tmp/pr.diff)
+          BYTES=$(wc -c < /tmp/pr.diff)
+          echo "Diff: ${BYTES} bytes, ${LINES} lines"
 
-      - name: Claude Opus AI Review
-        uses: actions/github-script@v7
+          # 18000文字に制限
+          python3 -c "
+          with open('/tmp/pr.diff') as f:
+              diff = f.read()
+          MAX = 18000
+          truncated = len(diff) > MAX
+          if truncated:
+              diff = diff[:MAX] + '\n...[diff truncated due to length]'
+          with open('/tmp/pr.diff.limited', 'w') as f:
+              f.write(diff)
+          print('truncated=true' if truncated else 'truncated=false')
+          " >> $GITHUB_ENV
+
+      - name: Run AI Review
+        id: review
         env:
-          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_API_KEY_2: ${{ secrets.ANTHROPIC_API_KEY_2 }}
-          ANTHROPIC_API_KEY_3: ${{ secrets.ANTHROPIC_API_KEY_3 }}
+          CLAUDE_CODE_OAUTH_TOKEN_1: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.ANTHROPIC_API_KEY_2 }}
+          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ secrets.ANTHROPIC_API_KEY_3 }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE:  ${{ github.event.pull_request.title }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          SYSTEM_PROMPT="You are a principal engineer reviewing code for miyabi-line (line-harness-oss). Stack: Cloudflare Workers (Hono) + D1 (SQLite) + Next.js 15 + TypeScript strict + LIFF. Rules: NO Node.js APIs in Workers. D1 queries must use prepared statements. TypeScript no any. Validate all input. No SQL injection. Never expose internal errors."
+
+          USER_PROMPT="PR #${PR_NUMBER}: ${PR_TITLE}
+          Branch: ${PR_BRANCH}
+
+          Review the diff below. Output MUST follow this exact format:
+
+          ## Verdict
+          **[APPROVE]** <- write exactly this if production-ready
+          OR
+          **[REQUEST_CHANGES]** <- write exactly this if issues found
+
+          ## Summary
+          (2-3 sentences, plain language)
+
+          ## Findings
+          (use: OK good  WARNING warning  CRITICAL critical)
+
+          ## Required Changes
+          (numbered list if REQUEST_CHANGES, else: None)
+
+          Be strict. Only APPROVE if safe and correct for production."
+
+          # 3トークンをローテーションして試みる
+          USED_KEY=0
+          for i in 1 2 3; do
+            case $i in
+              1) TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_1" ;;
+              2) TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_2" ;;
+              3) TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_3" ;;
+            esac
+
+            if [ -z "${TOKEN:-}" ]; then
+              echo "Token $i is empty, skipping."
+              continue
+            fi
+
+            echo "Trying token $i/3..."
+            set +e
+            REVIEW=$(cat /tmp/pr.diff.limited | \
+              ANTHROPIC_API_KEY="" \
+              CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" \
+              CLAUDE_NO_ANALYTICS=1 \
+              NO_UPDATE_NOTIFIER=1 \
+              claude \
+                --model claude-opus-4-6 \
+                --print "$USER_PROMPT" \
+                --system-prompt "$SYSTEM_PROMPT" \
+                2>/tmp/claude_stderr.txt)
+            EXIT_CODE=$?
+            set -e
+
+            if [ $EXIT_CODE -eq 0 ] && echo "$REVIEW" | grep -qE '\*\*\[(APPROVE|REQUEST_CHANGES)\]\*\*'; then
+              echo "Success with token $i"
+              USED_KEY=$i
+              break
+            else
+              echo "Token $i failed (exit: $EXIT_CODE):"
+              cat /tmp/claude_stderr.txt 2>/dev/null | head -5 || true
+            fi
+          done
+
+          if [ "$USED_KEY" -eq 0 ]; then
+            echo "All tokens failed. Cannot post AI review."
+            exit 1
+          fi
+
+          echo "$REVIEW" > /tmp/review_output.txt
+          echo "used_key=$USED_KEY" >> $GITHUB_OUTPUT
+
+          if echo "$REVIEW" | grep -q '\*\*\[APPROVE\]\*\*'; then
+            echo "verdict=APPROVE" >> $GITHUB_OUTPUT
+          else
+            echo "verdict=REQUEST_CHANGES" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Verdict: $(grep -o '\*\*\[.*\]\*\*' /tmp/review_output.txt | head -1)"
+
+      - name: Post review to PR
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-
-            // diff を最大 18000 文字に制限（Claude のコンテキスト節約）
-            let diff = fs.readFileSync('/tmp/pr.diff', 'utf8');
-            const MAX_CHARS = 18000;
-            const truncated = diff.length > MAX_CHARS;
-            if (truncated) diff = diff.substring(0, MAX_CHARS) + '\n...[diff truncated due to length]';
-
+            const review = fs.readFileSync('/tmp/review_output.txt', 'utf8');
+            const verdict = '${{ steps.review.outputs.verdict }}';
+            const usedKey = '${{ steps.review.outputs.used_key }}';
+            const truncated = process.env.truncated === 'true';
             const pr = context.payload.pull_request;
 
-            // Multi-line strings as arrays to avoid YAML indentation issues
-            const systemPrompt = [
-              'You are a principal engineer reviewing code for "miyabi-line" (line-harness-oss).',
-              'Stack: Cloudflare Workers (Hono) + D1 (SQLite) + Next.js 15 + TypeScript strict + LIFF.',
-              'Rules:',
-              '- NO Node.js APIs in Workers (no fs, path, buffer, etc.)',
-              '- D1 queries must use prepared statements (.prepare().bind())',
-              '- TypeScript: no "any", no implicit any, proper return types',
-              '- Hono route handlers must validate all input',
-              '- SQL: no raw string interpolation (SQLi prevention)',
-              '- Never expose internal errors to LINE users',
-            ].join('\n');
-
-            const userPrompt = [
-              `PR #${pr.number}: ${pr.title}`,
-              `Branch: ${pr.head.ref}`,
-              '',
-              '## Diff:',
-              '```diff',
-              diff,
-              '```',
-              '',
-              'Review this change against the rules above. Your output MUST follow this exact format:',
-              '',
-              '## Verdict',
-              '**[APPROVE]** <- write exactly this if production-ready',
-              'OR',
-              '**[REQUEST_CHANGES]** <- write exactly this if issues found',
-              '',
-              '## Summary',
-              '(2-3 sentences, plain language)',
-              '',
-              '## Findings',
-              '(use: OK good  WARNING warning  CRITICAL critical)',
-              '',
-              '## Required Changes',
-              '(numbered list -- only if REQUEST_CHANGES; write "None" if APPROVE)',
-              '',
-              'Be strict. Only APPROVE if the code is genuinely safe and correct for production Cloudflare Workers.',
-            ].join('\n');
-
-            // ── 3アカウントのトークンローテーション対応 ──────────────────
-            // 429 (rate limit) または 401 (token expired) の場合、次のキーへフォールバック
-            const apiKeys = [
-              process.env.ANTHROPIC_API_KEY,
-              process.env.ANTHROPIC_API_KEY_2,
-              process.env.ANTHROPIC_API_KEY_3,
-            ].filter(Boolean);
-
-            let review = null;
-            let usedKeyIndex = -1;
-
-            for (let i = 0; i < apiKeys.length; i++) {
-              const apiKey = apiKeys[i];
-              console.log(`Trying API key ${i + 1}/${apiKeys.length}...`);
-
-              const response = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
-                headers: {
-                  'Authorization': 'Bearer ' + apiKey,
-                  'anthropic-version': '2023-06-01',
-                  'content-type': 'application/json',
-                },
-                body: JSON.stringify({
-                  model: 'claude-opus-4-6',
-                  max_tokens: 2048,
-                  system: systemPrompt,
-                  messages: [{ role: 'user', content: userPrompt }],
-                }),
-              });
-
-              if (response.ok) {
-                const data = await response.json();
-                review = data.content[0].text;
-                usedKeyIndex = i + 1;
-                console.log(`Success with API key ${usedKeyIndex}`);
-                break;
-              }
-
-              const status = response.status;
-              const errText = await response.text();
-              console.log(`API key ${i + 1} failed: HTTP ${status} - ${errText.substring(0, 200)}`);
-
-              if (status === 429 || status === 401) {
-                // Rate limit or expired token — try next key
-                if (i < apiKeys.length - 1) {
-                  console.log(`Falling back to API key ${i + 2}...`);
-                  continue;
-                }
-              }
-
-              // Non-retryable error
-              throw new Error(`Claude API ${status}: ${errText}`);
-            }
-
-            if (!review) {
-              throw new Error('All API keys exhausted or rate-limited. Please check secret configuration.');
-            }
-
-            // Determine verdict
-            const isApprove = /\*\*\[APPROVE\]\*\*/.test(review);
-            const event = isApprove ? 'APPROVE' : 'REQUEST_CHANGES';
+            const event = verdict === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
 
             const body = [
-              '## AI Code Review -- Claude Opus 4.6',
+              '## AI Code Review -- Claude Opus 4.6 (via Claude Code CLI)',
               '',
               review,
               '',
               '---',
-              `_Model: claude-opus-4-6 | Diff: ${truncated ? 'truncated' : 'full'} | PR: #${pr.number} | Key: #${usedKeyIndex}_`,
+              `_Model: claude-opus-4-6 | Diff: ${truncated ? 'truncated' : 'full'} | PR: #${pr.number} | Token: #${usedKey}_`,
             ].join('\n');
 
-            // Post review to PR
             await github.rest.pulls.createReview({
               owner:       context.repo.owner,
               repo:        context.repo.repo,
@@ -170,9 +173,8 @@ jobs:
               body,
             });
 
-            console.log(`Posted ${event} review for PR #${pr.number} (used key #${usedKeyIndex})`);
+            console.log(`Posted ${event} review for PR #${pr.number} (token #${usedKey})`);
 
-            // If REQUEST_CHANGES, fail the job to block auto-merge
             if (event === 'REQUEST_CHANGES') {
               core.setFailed('AI review requested changes. Fix the issues before merging.');
             }
