@@ -8,6 +8,8 @@ import {
   getEntryRouteByRefCode,
   recordRefTracking,
   addTagToFriend,
+  getLineAccountByChannelId,
+  getLineAccounts,
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
@@ -27,7 +29,7 @@ const liffRoutes = new Hono<Env>();
  *   ?fbclid=xxx  — Meta Ads click ID
  *   ?utm_source=xxx, utm_medium, utm_campaign, utm_content, utm_term — UTM params
  */
-liffRoutes.get('/auth/line', (c) => {
+liffRoutes.get('/auth/line', async (c) => {
   const ref = c.req.query('ref') || '';
   const redirect = c.req.query('redirect') || '';
   const gclid = c.req.query('gclid') || '';
@@ -35,13 +37,29 @@ liffRoutes.get('/auth/line', (c) => {
   const utmSource = c.req.query('utm_source') || '';
   const utmMedium = c.req.query('utm_medium') || '';
   const utmCampaign = c.req.query('utm_campaign') || '';
-  const liffUrl = c.env.LIFF_URL;
-  const channelId = c.env.LINE_LOGIN_CHANNEL_ID;
+  const accountParam = c.req.query('account') || '';
+  const uidParam = c.req.query('uid') || ''; // existing user UUID for cross-account linking
   const baseUrl = new URL(c.req.url).origin;
+
+  // Multi-account: resolve LINE Login channel + LIFF from DB if account param provided
+  let channelId = c.env.LINE_LOGIN_CHANNEL_ID;
+  let liffUrl = c.env.LIFF_URL;
+  if (accountParam) {
+    const account = await getLineAccountByChannelId(c.env.DB, accountParam);
+    if (account?.login_channel_id) {
+      channelId = account.login_channel_id;
+    }
+    if (account?.liff_id) {
+      liffUrl = `https://liff.line.me/${account.liff_id}`;
+    }
+  }
   const callbackUrl = `${baseUrl}/auth/callback`;
 
   // Build LIFF URL with ref + ad params (for mobile → LINE app)
+  // Extract LIFF ID from URL and pass as query param so the app can init correctly
+  const liffIdMatch = liffUrl.match(/liff\.line\.me\/([0-9]+-[A-Za-z0-9]+)/);
   const liffParams = new URLSearchParams();
+  if (liffIdMatch) liffParams.set('liffId', liffIdMatch[1]);
   if (ref) liffParams.set('ref', ref);
   if (redirect) liffParams.set('redirect', redirect);
   if (gclid) liffParams.set('gclid', gclid);
@@ -53,18 +71,67 @@ liffRoutes.get('/auth/line', (c) => {
 
   // Build OAuth URL (for desktop fallback)
   // Pack all tracking params into state so they survive the OAuth redirect
-  const state = JSON.stringify({ ref, redirect, gclid, fbclid, utmSource, utmMedium, utmCampaign });
+  const state = JSON.stringify({ ref, redirect, gclid, fbclid, utmSource, utmMedium, utmCampaign, account: accountParam, uid: uidParam });
   const encodedState = btoa(state);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', channelId);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
-  loginUrl.searchParams.set('scope', 'profile openid');
+  loginUrl.searchParams.set('scope', 'profile openid email');
   loginUrl.searchParams.set('bot_prompt', 'aggressive');
   loginUrl.searchParams.set('state', encodedState);
 
-  // Serve landing page that opens LINE app on mobile
-  return c.html(authLandingPage(liffTarget, loginUrl.toString()));
+  // Build LIFF URL with params (opens LINE app directly on mobile + QR on PC)
+  const qrParams = new URLSearchParams();
+  if (ref) qrParams.set('ref', ref);
+  if (uidParam) qrParams.set('uid', uidParam);
+  if (accountParam) qrParams.set('account', accountParam);
+  const qrUrl = qrParams.toString() ? `${liffUrl}?${qrParams.toString()}` : liffUrl;
+
+  // Mobile: redirect to LIFF URL (opens LINE app directly)
+  // Exception: cross-account links (account param) use OAuth directly
+  // because Account A's LIFF can't open from Account B's LINE chat
+  const ua = (c.req.header('user-agent') || '').toLowerCase();
+  const isMobile = /iphone|ipad|android|mobile/.test(ua);
+  if (isMobile) {
+    if (accountParam) {
+      // Cross-account: use OAuth (LIFF won't work across accounts)
+      return c.redirect(loginUrl.toString());
+    }
+    return c.redirect(qrUrl);
+  }
+
+  // PC: show QR code page
+  return c.html(`<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LINE で友だち追加</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #0d1117; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 48px; text-align: center; max-width: 480px; width: 90%; }
+    h1 { font-size: 24px; font-weight: 800; margin-bottom: 8px; }
+    .sub { font-size: 14px; color: rgba(255,255,255,0.5); margin-bottom: 32px; }
+    .qr { background: #fff; border-radius: 16px; padding: 24px; display: inline-block; margin-bottom: 24px; }
+    .qr img { display: block; width: 240px; height: 240px; }
+    .hint { font-size: 13px; color: rgba(255,255,255,0.4); line-height: 1.6; }
+    .badge { display: inline-block; margin-top: 24px; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; color: #06C755; background: rgba(6,199,85,0.1); border: 1px solid rgba(6,199,85,0.2); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>LINE Harness を体験</h1>
+    <p class="sub">スマートフォンで QR コードを読み取ってください</p>
+    <div class="qr">
+      <img src="https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(qrUrl)}" alt="QR Code">
+    </div>
+    <p class="hint">LINE アプリのカメラまたは<br>スマートフォンのカメラで読み取れます</p>
+    <div class="badge">LINE Harness OSS</div>
+  </div>
+</body>
+</html>`);
 });
 
 /**
@@ -85,6 +152,8 @@ liffRoutes.get('/auth/callback', async (c) => {
   let utmSource = '';
   let utmMedium = '';
   let utmCampaign = '';
+  let accountParam = '';
+  let uidParam = '';
   try {
     const parsed = JSON.parse(atob(stateParam));
     ref = parsed.ref || '';
@@ -94,6 +163,8 @@ liffRoutes.get('/auth/callback', async (c) => {
     utmSource = parsed.utmSource || '';
     utmMedium = parsed.utmMedium || '';
     utmCampaign = parsed.utmCampaign || '';
+    accountParam = parsed.account || '';
+    uidParam = parsed.uid || '';
   } catch {
     // ignore
   }
@@ -106,6 +177,17 @@ liffRoutes.get('/auth/callback', async (c) => {
     const baseUrl = new URL(c.req.url).origin;
     const callbackUrl = `${baseUrl}/auth/callback`;
 
+    // Multi-account: resolve LINE Login credentials from DB
+    let loginChannelId = c.env.LINE_LOGIN_CHANNEL_ID;
+    let loginChannelSecret = c.env.LINE_LOGIN_CHANNEL_SECRET;
+    if (accountParam) {
+      const account = await getLineAccountByChannelId(c.env.DB, accountParam);
+      if (account?.login_channel_id && account?.login_channel_secret) {
+        loginChannelId = account.login_channel_id;
+        loginChannelSecret = account.login_channel_secret;
+      }
+    }
+
     // Exchange code for tokens
     const tokenRes = await fetch('https://api.line.me/oauth2/v2.1/token', {
       method: 'POST',
@@ -114,8 +196,8 @@ liffRoutes.get('/auth/callback', async (c) => {
         grant_type: 'authorization_code',
         code,
         redirect_uri: callbackUrl,
-        client_id: c.env.LINE_LOGIN_CHANNEL_ID,
-        client_secret: c.env.LINE_LOGIN_CHANNEL_SECRET,
+        client_id: loginChannelId,
+        client_secret: loginChannelSecret,
       }),
     });
 
@@ -131,13 +213,13 @@ liffRoutes.get('/auth/callback', async (c) => {
       token_type: string;
     }>();
 
-    // Verify ID token to get sub
+    // Verify ID token to get sub (use resolved login channel ID, not env default)
     const verifyRes = await fetch('https://api.line.me/oauth2/v2.1/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         id_token: tokens.id_token,
-        client_id: c.env.LINE_LOGIN_CHANNEL_ID,
+        client_id: loginChannelId,
       }),
     });
 
@@ -188,13 +270,18 @@ liffRoutes.get('/auth/callback', async (c) => {
     if (existingUserId) {
       userId = existingUserId;
     } else {
+      // Cross-account linking: if uid is provided, use that existing UUID
+      if (uidParam) {
+        userId = uidParam;
+      }
+
       // Try to find by email
-      if (verified.email) {
+      if (!userId && verified.email) {
         const existingUser = await getUserByEmail(db, verified.email);
         if (existingUser) userId = existingUser.id;
       }
 
-      // Create new user
+      // Create new user only if no existing UUID found
       if (!userId) {
         const newUser = await createUser(db, {
           email: verified.email || null,
@@ -256,10 +343,79 @@ liffRoutes.get('/auth/callback', async (c) => {
         .run();
     }
 
+    // Auto-enroll in friend_add scenarios + immediate delivery (skip delivery window)
+    try {
+      const { getScenarios, enrollFriendInScenario: enroll, getScenarioSteps } = await import('@line-crm/db');
+      const { LineClient } = await import('@line-crm/line-sdk');
+      const { buildMessage, expandVariables } = await import('../services/step-delivery.js');
+
+      // Resolve which account this friend belongs to
+      const matchedAccountId = accountParam
+        ? (await getLineAccountByChannelId(db, accountParam))?.id ?? null
+        : null;
+
+      // Get access token for this account
+      let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
+      if (accountParam) {
+        const acct = await getLineAccountByChannelId(db, accountParam);
+        if (acct) accessToken = acct.channel_access_token;
+      }
+      const lineClient = new LineClient(accessToken);
+
+      const scenarios = await getScenarios(db);
+      for (const scenario of scenarios) {
+        const scenarioAccountMatch = !scenario.line_account_id || !matchedAccountId || scenario.line_account_id === matchedAccountId;
+        if (scenario.trigger_type === 'friend_add' && scenario.is_active && scenarioAccountMatch) {
+          const existing = await db
+            .prepare('SELECT id FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ?')
+            .bind(friend.id, scenario.id)
+            .first<{ id: string }>();
+          if (!existing) {
+            await enroll(db, friend.id, scenario.id);
+
+            // Immediate delivery of first step (skip delivery window)
+            const steps = await getScenarioSteps(db, scenario.id);
+            const firstStep = steps[0];
+            if (firstStep && firstStep.delay_minutes === 0) {
+              const expandedContent = expandVariables(
+                firstStep.message_content,
+                friend as { id: string; display_name: string | null; user_id: string | null },
+                c.env.WORKER_URL,
+              );
+              await lineClient.pushMessage(lineUserId, [buildMessage(firstStep.message_type, expandedContent)]);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('OAuth scenario enrollment error:', err);
+    }
+
     // Redirect or show completion
     // Only allow relative redirects (starting with '/') to prevent open redirect attacks
     if (redirect && redirect.startsWith('/')) {
       return c.redirect(redirect);
+    }
+
+    // If friend is not yet following this bot, redirect to friend-add page
+    if (accountParam) {
+      const account = await getLineAccountByChannelId(db, accountParam);
+      if (account) {
+        // Fetch bot basic ID for friend-add URL
+        try {
+          const botInfo = await fetch('https://api.line.me/v2/bot/info', {
+            headers: { Authorization: `Bearer ${account.channel_access_token}` },
+          });
+          if (botInfo.ok) {
+            const bot = await botInfo.json() as { basicId?: string };
+            if (bot.basicId) {
+              return c.redirect(`https://line.me/R/ti/p/${bot.basicId}`);
+            }
+          }
+        } catch {
+          // Fall through to completion page
+        }
+      }
     }
 
     return c.html(completionPage(displayName, pictureUrl, ref));
@@ -306,22 +462,34 @@ liffRoutes.post('/api/liff/link', async (c) => {
     const body = await c.req.json<{
       idToken: string;
       displayName?: string | null;
+      ref?: string;
+      existingUuid?: string;
     }>();
 
     if (!body.idToken) {
       return c.json({ success: false, error: 'idToken is required' }, 400);
     }
 
-    const verifyRes = await fetch('https://api.line.me/oauth2/v2.1/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        id_token: body.idToken,
-        client_id: c.env.LINE_CHANNEL_ID,
-      }),
-    });
+    // Try verifying with default Login channel, then DB accounts
+    const loginChannelIds = [c.env.LINE_LOGIN_CHANNEL_ID];
+    const dbAccounts = await getLineAccounts(c.env.DB);
+    for (const acct of dbAccounts) {
+      if (acct.login_channel_id && !loginChannelIds.includes(acct.login_channel_id)) {
+        loginChannelIds.push(acct.login_channel_id);
+      }
+    }
 
-    if (!verifyRes.ok) {
+    let verifyRes: Response | null = null;
+    for (const channelId of loginChannelIds) {
+      verifyRes = await fetch('https://api.line.me/oauth2/v2.1/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ id_token: body.idToken, client_id: channelId }),
+      });
+      if (verifyRes.ok) break;
+    }
+
+    if (!verifyRes?.ok) {
       return c.json({ success: false, error: 'Invalid ID token' }, 401);
     }
 
@@ -336,6 +504,11 @@ liffRoutes.post('/api/liff/link', async (c) => {
     }
 
     if ((friend as unknown as Record<string, unknown>).user_id) {
+      // Still save ref even if already linked
+      if (body.ref) {
+        await db.prepare('UPDATE friends SET ref_code = ? WHERE id = ? AND ref_code IS NULL')
+          .bind(body.ref, friend.id).run();
+      }
       return c.json({
         success: true,
         data: { userId: (friend as unknown as Record<string, unknown>).user_id, alreadyLinked: true },
@@ -358,6 +531,23 @@ liffRoutes.post('/api/liff/link', async (c) => {
 
     await linkFriendToUser(db, friend.id, userId);
 
+    // Save ref_code from LIFF (first touch wins)
+    if (body.ref) {
+      await db.prepare('UPDATE friends SET ref_code = ? WHERE id = ? AND ref_code IS NULL')
+        .bind(body.ref, friend.id).run();
+
+      // Record ref tracking
+      try {
+        const route = await getEntryRouteByRefCode(db, body.ref);
+        await recordRefTracking(db, {
+          refCode: body.ref,
+          friendId: friend.id,
+          entryRouteId: route?.id ?? null,
+          sourceUrl: null,
+        });
+      } catch { /* silent */ }
+    }
+
     return c.json({
       success: true,
       data: { userId, alreadyLinked: false },
@@ -376,6 +566,9 @@ liffRoutes.post('/api/liff/link', async (c) => {
 liffRoutes.get('/api/analytics/ref-summary', async (c) => {
   try {
     const db = c.env.DB;
+    const lineAccountId = c.req.query('lineAccountId');
+    const accountFilter = lineAccountId ? 'AND f.line_account_id = ?' : '';
+    const accountBinds = lineAccountId ? [lineAccountId] : [];
 
     const rows = await db
       .prepare(
@@ -387,9 +580,11 @@ liffRoutes.get('/api/analytics/ref-summary', async (c) => {
           MAX(rt.created_at) as latest_at
         FROM entry_routes er
         LEFT JOIN ref_tracking rt ON er.ref_code = rt.ref_code
+        LEFT JOIN friends f ON f.id = rt.friend_id ${accountFilter ? `${accountFilter}` : ''}
         GROUP BY er.ref_code, er.name
         ORDER BY friend_count DESC`,
       )
+      .bind(...accountBinds)
       .all<{
         ref_code: string;
         name: string;
@@ -398,13 +593,15 @@ liffRoutes.get('/api/analytics/ref-summary', async (c) => {
         latest_at: string | null;
       }>();
 
-    const totalFriendsRes = await db
-      .prepare(`SELECT COUNT(*) as count FROM friends`)
-      .first<{ count: number }>();
+    const totalStmt = lineAccountId
+      ? db.prepare(`SELECT COUNT(*) as count FROM friends WHERE line_account_id = ?`).bind(lineAccountId)
+      : db.prepare(`SELECT COUNT(*) as count FROM friends`);
+    const totalFriendsRes = await totalStmt.first<{ count: number }>();
 
-    const friendsWithRefRes = await db
-      .prepare(`SELECT COUNT(*) as count FROM friends WHERE ref_code IS NOT NULL AND ref_code != ''`)
-      .first<{ count: number }>();
+    const refStmt = lineAccountId
+      ? db.prepare(`SELECT COUNT(*) as count FROM friends WHERE ref_code IS NOT NULL AND ref_code != '' AND line_account_id = ?`).bind(lineAccountId)
+      : db.prepare(`SELECT COUNT(*) as count FROM friends WHERE ref_code IS NOT NULL AND ref_code != ''`);
+    const friendsWithRefRes = await refStmt.first<{ count: number }>();
 
     const totalFriends = totalFriendsRes?.count ?? 0;
     const friendsWithRef = friendsWithRefRes?.count ?? 0;
@@ -447,6 +644,10 @@ liffRoutes.get('/api/analytics/ref/:refCode', async (c) => {
       return c.json({ success: false, error: 'Entry route not found' }, 404);
     }
 
+    const lineAccountId = c.req.query('lineAccountId');
+    const accountFilter = lineAccountId ? 'AND f.line_account_id = ?' : '';
+    const binds = lineAccountId ? [refCode, refCode, lineAccountId] : [refCode, refCode];
+
     const friends = await db
       .prepare(
         `SELECT
@@ -456,10 +657,10 @@ liffRoutes.get('/api/analytics/ref/:refCode', async (c) => {
           rt.created_at as tracked_at
         FROM friends f
         LEFT JOIN ref_tracking rt ON f.id = rt.friend_id AND rt.ref_code = ?
-        WHERE f.ref_code = ?
+        WHERE f.ref_code = ? ${accountFilter}
         ORDER BY rt.created_at DESC`,
       )
-      .bind(refCode, refCode)
+      .bind(...binds)
       .all<{
         id: string;
         display_name: string;
@@ -514,7 +715,7 @@ liffRoutes.post('/api/links/wrap', async (c) => {
 // ─── HTML Templates ─────────────────────────────────────────────
 
 function authLandingPage(liffUrl: string, oauthUrl: string): string {
-  // Extract LIFF ID from URL like https://liff.line.me/YOUR_LIFF_ID?ref=test
+  // Extract LIFF ID from URL like https://liff.line.me/{LIFF_ID}?ref=test
   const liffIdMatch = liffUrl.match(/liff\.line\.me\/([^?]+)/);
   const liffId = liffIdMatch ? liffIdMatch[1] : '';
   // Query string part (e.g., ?ref=test)

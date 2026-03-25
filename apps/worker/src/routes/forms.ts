@@ -216,10 +216,10 @@ forms.post('/api/forms/:id/submit', async (c) => {
       }
     }
 
-    // Save submission
+    // Save submission (friendId null if not resolved — avoids FK constraint)
     const submission = await createFormSubmission(c.env.DB, {
       formId,
-      friendId,
+      friendId: friendId || null,
       data: JSON.stringify(submissionData),
     });
 
@@ -256,8 +256,72 @@ forms.post('/api/forms/:id/submit', async (c) => {
         sideEffects.push(enrollFriendInScenario(db, friendId, form.on_submit_scenario_id));
       }
 
+      // Send confirmation message with submitted data back to user
+      sideEffects.push(
+        (async () => {
+          console.log('Form reply: starting for friendId', friendId);
+          const friend = await getFriendById(db, friendId!);
+          if (!friend?.line_user_id) { console.log('Form reply: no line_user_id'); return; }
+          console.log('Form reply: sending to', friend.line_user_id);
+          const { LineClient } = await import('@line-crm/line-sdk');
+          const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+
+          // Build Flex card showing their answers
+          const entries = Object.entries(submissionData as Record<string, unknown>);
+          const answerRows = entries.map(([key, value]) => {
+            const field = form.fields ? (JSON.parse(form.fields) as Array<{ name: string; label: string }>).find((f: { name: string }) => f.name === key) : null;
+            const label = field?.label || key;
+            const val = Array.isArray(value) ? value.join(', ') : String(value || '-') || '-';
+            return {
+              type: 'box' as const, layout: 'vertical' as const, margin: 'md' as const,
+              contents: [
+                { type: 'text' as const, text: label, size: 'xxs' as const, color: '#64748b' },
+                { type: 'text' as const, text: val, size: 'sm' as const, color: '#1e293b', weight: 'bold' as const, wrap: true },
+              ],
+            };
+          });
+
+          const flex = {
+            type: 'bubble', size: 'giga',
+            header: {
+              type: 'box', layout: 'vertical',
+              contents: [
+                { type: 'text', text: '診断結果', size: 'lg', weight: 'bold', color: '#1e293b' },
+                { type: 'text', text: `${friend.display_name || ''}さんのプロフィール`, size: 'xs', color: '#64748b', margin: 'sm' },
+              ],
+              paddingAll: '20px', backgroundColor: '#f0fdf4',
+            },
+            body: {
+              type: 'box', layout: 'vertical',
+              contents: [
+                ...answerRows,
+                { type: 'separator', margin: 'lg' },
+                { type: 'box', layout: 'vertical', margin: 'lg', backgroundColor: '#eff6ff', cornerRadius: 'md', paddingAll: '12px',
+                  contents: [
+                    { type: 'text', text: 'メタデータに自動保存済み。今後の配信があなたに最適化されます。', size: 'xxs', color: '#2563EB', wrap: true },
+                  ],
+                },
+              ],
+              paddingAll: '20px',
+            },
+            footer: {
+              type: 'box', layout: 'vertical', paddingAll: '16px',
+              contents: [
+                { type: 'button', action: { type: 'message', label: 'アカウント連携を見る', text: 'アカウント連携を見る' }, style: 'primary', color: '#14b8a6' },
+              ],
+            },
+          };
+
+          const { buildMessage } = await import('../services/step-delivery.js');
+          await lineClient.pushMessage(friend.line_user_id, [buildMessage('flex', JSON.stringify(flex))]);
+        })(),
+      );
+
       if (sideEffects.length > 0) {
-        await Promise.allSettled(sideEffects);
+        const results = await Promise.allSettled(sideEffects);
+        for (const r of results) {
+          if (r.status === 'rejected') console.error('Form side-effect failed:', r.reason);
+        }
       }
     }
 

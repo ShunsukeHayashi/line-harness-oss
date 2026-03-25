@@ -2,7 +2,7 @@
 
 ## プロジェクト概要
 LINE公式アカウント向けOSS CRM / マーケティングオートメーション
-L-step/Utage代替。AI（CC）ネイティブ設計。
+L社/U社代替。AI（CC）ネイティブ設計。
 
 ## コンセプト
 - **LINE Harness** = AIがLINEを安全に操作するための基盤
@@ -11,9 +11,9 @@ L-step/Utage代替。AI（CC）ネイティブ設計。
 - 1プロジェクト = 1デプロイ（ステルス性最強）
 
 ## デプロイ先
-- **API**: https://your-worker.your-subdomain.workers.dev
-- **管理画面**: https://your-admin.pages.dev
-- **D1**: line-crm (your-database-id)
+- **API**: https://line-crm-worker.line-crm-api.workers.dev
+- **管理画面**: https://line-crm-admin.pages.dev
+- **D1**: line-crm (YOUR_D1_DATABASE_ID) APAC/KIX
 - **Cron**: 5分毎ステップ配信チェック + リマインダー配信
 
 ## 実装状況
@@ -121,4 +121,4 @@ templates, tracked_links, users
 
 ## 参考資料
 - SPEC.md - 技術仕様
-- LSTEP_FEATURES.md - L-step/Utage全機能調査
+- LSTEP_FEATURES.md - L社/U社全機能調査

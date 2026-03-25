@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useAccount } from '@/contexts/account-context'
+import type { AccountWithStats } from '@/contexts/account-context'
 
 // ─── メニュー定義（ユーザー目線のカテゴリ） ───
 
@@ -30,6 +32,7 @@ const menuSections = [
       { href: '/affiliates', label: '流入経路', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
       { href: '/conversions', label: 'CV計測', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
       { href: '/scoring', label: 'スコアリング', icon: 'M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z' },
+      { href: '/form-submissions', label: 'フォーム回答', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
     ],
   },
   {
@@ -50,6 +53,104 @@ const menuSections = [
     ],
   },
 ]
+
+function AccountAvatar({ account, size = 32 }: { account: AccountWithStats; size?: number }) {
+  const displayName = account.displayName || account.name
+  if (account.pictureUrl) {
+    return (
+      <img
+        src={account.pictureUrl}
+        alt={displayName}
+        className="rounded-full object-cover shrink-0"
+        style={{ width: size, height: size }}
+      />
+    )
+  }
+  return (
+    <div
+      className="rounded-full flex items-center justify-center text-white font-bold shrink-0"
+      style={{ width: size, height: size, backgroundColor: '#06C755', fontSize: size * 0.4 }}
+    >
+      {displayName.charAt(0)}
+    </div>
+  )
+}
+
+function AccountSwitcher() {
+  const { accounts, selectedAccount, setSelectedAccountId, loading } = useAccount()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  if (loading || accounts.length === 0) return null
+
+  const displayName = selectedAccount?.displayName || selectedAccount?.name || ''
+
+  return (
+    <div ref={ref} className="px-3 py-3 border-b border-gray-200">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+      >
+        {selectedAccount && <AccountAvatar account={selectedAccount} size={28} />}
+        <div className="flex-1 text-left min-w-0">
+          <p className="text-sm font-medium text-gray-900 truncate">{displayName}</p>
+        </div>
+        <svg
+          className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+          {accounts.map((account) => {
+            const isSelected = account.id === selectedAccount?.id
+            const name = account.displayName || account.name
+            return (
+              <button
+                key={account.id}
+                onClick={() => {
+                  setSelectedAccountId(account.id)
+                  setOpen(false)
+                }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors ${
+                  isSelected ? 'bg-green-50' : 'hover:bg-gray-50'
+                }`}
+              >
+                <AccountAvatar account={account} size={24} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm truncate ${isSelected ? 'font-semibold text-green-700' : 'text-gray-700'}`}>
+                    {name}
+                  </p>
+                  {account.basicId && (
+                    <p className="text-xs text-gray-400 truncate">{account.basicId}</p>
+                  )}
+                </div>
+                {isSelected && (
+                  <svg className="w-4 h-4 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function NavIcon({ d }: { d: string }) {
   return (
@@ -85,6 +186,9 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
+
+      {/* アカウント切替 */}
+      <AccountSwitcher />
 
       {/* ナビゲーション */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">

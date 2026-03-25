@@ -26,6 +26,9 @@ LINE_LOGIN_CHANNEL_ID = "2008491323"
 ALLOWED_ORIGINS    = "https://miyabi-line-admin.pages.dev"
 ENABLE_STEALTH_MODE = "false"
 
+[vars]
+WORKER_URL = "https://line-crm-worker.line-crm-api.workers.dev"
+
 [[d1_databases]]
 binding      = "DB"
 database_name = "miyabi-line-crm"

@@ -194,6 +194,8 @@ function injectStyles(): void {
       border-color: #06C755; background: #e8faf0;
     }
     .radio-label input, .checkbox-label input { accent-color: #06C755; width: 18px; height: 18px; }
+    .radio-label input[type="radio"] { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; border: 2px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
+    .radio-label input[type="radio"]:checked { background: #06C755; border-color: #06C755; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3E%3C/svg%3E"); background-size: 14px; background-position: center; background-repeat: no-repeat; }
     .submit-btn {
       width: 100%; padding: 14px; border: none; border-radius: 8px;
       background: #06C755; color: #fff; font-size: 16px; font-weight: 700;
@@ -382,18 +384,23 @@ async function submitForm(): Promise<void> {
 
   try {
     const data = collectFormData();
+    console.log('Form data collected:', JSON.stringify(data));
     const body: Record<string, unknown> = { data };
     if (state.profile?.userId) body.lineUserId = state.profile.userId;
-    if (state.friendId) body.friendId = state.friendId;
+    // Note: state.friendId is users.id (UUID), not friends.id — don't send as friendId
+    console.log('Submitting to:', `${API_URL}/api/forms/${state.formDef.id}/submit`);
 
     const res = await apiCall(`/api/forms/${state.formDef.id}/submit`, {
       method: 'POST',
       body: JSON.stringify(body),
     });
+    console.log('Response status:', res.status);
 
     if (!res.ok) {
-      const errData = await res.json().catch(() => null) as { error?: string } | null;
-      throw new Error(errData?.error ?? '送信に失敗しました');
+      const errText = await res.text().catch(() => '');
+      let errMsg = '送信に失敗しました';
+      try { const errData = JSON.parse(errText); errMsg = errData.error || errMsg; } catch { errMsg = errText || errMsg; }
+      throw new Error(`${res.status}: ${errMsg}`);
     }
 
     renderSuccess();

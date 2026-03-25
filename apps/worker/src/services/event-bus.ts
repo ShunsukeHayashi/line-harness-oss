@@ -35,29 +35,13 @@ export async function fireEvent(
   eventType: string,
   payload: EventPayload,
   lineAccessToken?: string,
+  lineAccountId?: string | null,
 ): Promise<void> {
-  // Phase 1: Webhook通知とスコアリングを並行実行
   await Promise.allSettled([
     fireOutgoingWebhooks(db, eventType, payload),
     processScoring(db, eventType, payload),
-  ]);
-
-  // スコアリング完了後、最新スコアをpayload.eventDataに注入
-  // score_threshold 条件付き automation が正しく評価されるために必要
-  if (payload.friendId) {
-    const row = await db
-      .prepare('SELECT score FROM friends WHERE id = ?')
-      .bind(payload.friendId)
-      .first<{ score: number }>();
-    if (row) {
-      payload.eventData = { ...(payload.eventData ?? {}), currentScore: row.score };
-    }
-  }
-
-  // Phase 2: 最新スコアを保持した状態で自動化と通知を並行実行
-  await Promise.allSettled([
-    processAutomations(db, eventType, payload, lineAccessToken),
-    processNotifications(db, eventType, payload),
+    processAutomations(db, eventType, payload, lineAccessToken, lineAccountId),
+    processNotifications(db, eventType, payload, lineAccountId),
   ]);
 }
 
@@ -126,9 +110,14 @@ async function processAutomations(
   eventType: string,
   payload: EventPayload,
   lineAccessToken?: string,
+  lineAccountId?: string | null,
 ): Promise<void> {
   try {
-    const automations = await getActiveAutomationsByEvent(db, eventType);
+    const allAutomations = await getActiveAutomationsByEvent(db, eventType);
+    // Filter by account: match this account's automations + unassigned (backward compat)
+    const automations = allAutomations.filter(
+      (a) => !a.line_account_id || !lineAccountId || a.line_account_id === lineAccountId,
+    );
 
     for (const automation of automations) {
       const conditions = JSON.parse(automation.conditions) as Record<string, unknown>;
@@ -186,13 +175,10 @@ function matchConditions(
     if (payload.eventData.tagId !== conditions.tag_id) return false;
   }
 
-  // keyword チェック (message_received イベントの属性アンケート対応)
+  // keyword チェック（message_received イベント用）
   if (conditions.keyword !== undefined && payload.eventData) {
     const text = payload.eventData.text as string | undefined;
-    if (text === undefined) return false;
-    const matchType = (conditions.match_type as string) ?? 'contains';
-    if (matchType === 'exact' && text !== conditions.keyword) return false;
-    if (matchType === 'contains' && !text.includes(conditions.keyword as string)) return false;
+    if (!text || !text.includes(conditions.keyword as string)) return false;
   }
 
   return true;
@@ -308,12 +294,18 @@ async function processNotifications(
   db: D1Database,
   eventType: string,
   payload: EventPayload,
+  lineAccountId?: string | null,
 ): Promise<void> {
   try {
-    const rules = await getActiveNotificationRulesByEvent(db, eventType);
+    const allRules = await getActiveNotificationRulesByEvent(db, eventType);
+    const rules = allRules.filter(
+      (r) => !r.line_account_id || !lineAccountId || r.line_account_id === lineAccountId,
+    );
 
     for (const rule of rules) {
-      const channels: string[] = JSON.parse(rule.channels);
+      let channels: string[] = JSON.parse(rule.channels);
+      // Guard against double-encoded JSON strings (e.g. "\"[\\\"webhook\\\"]\"")
+      if (typeof channels === 'string') channels = JSON.parse(channels);
 
       for (const channel of channels) {
         await createNotification(db, {

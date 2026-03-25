@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/api'
 import CcPromptButton from '@/components/cc-prompt-button'
+import { useAccount } from '@/contexts/account-context'
 
 const ccPrompts = [
   {
@@ -71,6 +72,7 @@ function StatCard({ title, value, loading, icon, href, accentColor = '#06C755' }
 }
 
 export default function DashboardPage() {
+  const { selectedAccountId, selectedAccount } = useAccount()
   const [stats, setStats] = useState<DashboardStats>({
     friendCount: null,
     activeScenarioCount: null,
@@ -88,7 +90,7 @@ export default function DashboardPage() {
       setError('')
       try {
         const [friendCountRes, scenariosRes, broadcastsRes, templatesRes, automationsRes, scoringRes] = await Promise.allSettled([
-          api.friends.count(),
+          api.friends.count({ accountId: selectedAccountId ?? undefined }),
           api.scenarios.list(),
           api.broadcasts.list(),
           api.templates.list(),
@@ -130,13 +132,17 @@ export default function DashboardPage() {
     }
 
     load()
-  }, [])
+  }, [selectedAccountId])
 
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">ダッシュボード</h1>
-        <p className="text-sm text-gray-500 mt-1">LINE公式アカウント CRM 管理画面</p>
+        <p className="text-sm text-gray-500 mt-1">
+          {selectedAccount
+            ? `${selectedAccount.displayName || selectedAccount.name} の管理画面`
+            : 'LINE公式アカウント CRM 管理画面'}
+        </p>
       </div>
 
       {error && (
@@ -144,6 +150,24 @@ export default function DashboardPage() {
           {error}
         </div>
       )}
+
+      {/* Demo banner */}
+      <a
+        href="https://line-crm-worker.line-crm-api.workers.dev/auth/line?ref=dashboard"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block mb-6 p-4 rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-100 hover:to-emerald-100 transition-colors"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-bold text-gray-900">LINE で体験する</p>
+            <p className="text-xs text-gray-500 mt-0.5">友だち追加でステップ配信・フォーム・自動返信を体験</p>
+          </div>
+          <span className="text-xs px-3 py-1.5 rounded-full text-white font-medium" style={{ backgroundColor: '#06C755' }}>
+            友だち追加
+          </span>
+        </div>
+      </a>
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">

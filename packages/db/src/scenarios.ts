@@ -9,6 +9,7 @@ export interface Scenario {
   description: string | null;
   trigger_type: ScenarioTriggerType;
   trigger_tag_id: string | null;
+  line_account_id: string | null;
   is_active: number;
   created_at: string;
   updated_at: string;
@@ -333,8 +334,14 @@ export async function enrollFriendInScenario(
       .first<FriendScenario>())!;
   }
 
-  const nextDeliveryAt = new Date(Date.now() + 9 * 60 * 60_000 + firstStep.delay_minutes * 60_000)
-    .toISOString().slice(0, -1) + '+09:00';
+  const rawDate = new Date(Date.now() + 9 * 60 * 60_000 + firstStep.delay_minutes * 60_000);
+  // Enforce 9:00-21:00 JST delivery window
+  const hours = rawDate.getUTCHours();
+  if (hours < 9 || hours >= 21) {
+    if (hours >= 21) rawDate.setUTCDate(rawDate.getUTCDate() + 1);
+    rawDate.setUTCHours(9, 0, 0, 0);
+  }
+  const nextDeliveryAt = rawDate.toISOString().slice(0, -1) + '+09:00';
 
   await db
     .prepare(
