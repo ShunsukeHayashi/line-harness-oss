@@ -2,6 +2,12 @@ import { Hono } from 'hono';
 import { getAiSettings, upsertAiSettings } from '@line-crm/db';
 import type { Env } from '../index.js';
 
+type AiSettingsUpdateBody = {
+  isEnabled: boolean;
+  systemPrompt?: string | null;
+  model?: string;
+};
+
 const aiSettings = new Hono<Env>();
 
 // GET /api/ai-settings — 現在のAI自動応答設定を返す
@@ -36,7 +42,7 @@ aiSettings.get('/api/ai-settings', async (c) => {
 
 // PUT /api/ai-settings — AI自動応答設定を更新する
 aiSettings.put('/api/ai-settings', async (c) => {
-  let body: { isEnabled?: boolean; systemPrompt?: string | null; model?: string };
+  let body: AiSettingsUpdateBody;
   try {
     body = await c.req.json();
   } catch {
