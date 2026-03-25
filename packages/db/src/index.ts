@@ -21,6 +21,7 @@ export * from './automations';
 export * from './entry-routes';
 export * from './tracked-links';
 export * from './forms';
+export * from './beta-feedback';
 
 /**
  * Thin wrapper around D1Database.

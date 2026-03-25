@@ -20,7 +20,10 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path.match(/^\/api\/webhooks\/incoming\/[^/]+\/receive$/) ||
     // LIFF form submission endpoints are public (LIFF context only)
     path.match(/^\/api\/forms\/[^/]+\/submit$/) ||
-    path.match(/^\/api\/forms\/[^/]+$/) // GET form definition (public for LIFF)
+    path.match(/^\/api\/forms\/[^/]+$/) || // GET form definition (public for LIFF)
+    // Beta feedback form page and submission endpoint are fully public
+    path === '/feedback' ||
+    path === '/api/beta-feedback'
     // NOTE: /api/liff/profile is intentionally NOT in this list.
     // It previously bypassed auth, which allowed any caller with a lineUserId
     // to fetch user profile data. Now it requires Authorization: Bearer {API_KEY}.

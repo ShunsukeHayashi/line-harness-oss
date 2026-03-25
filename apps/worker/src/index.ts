@@ -32,6 +32,7 @@ import { automations } from './routes/automations.js';
 import { richMenus } from './routes/rich-menus.js';
 import { trackedLinks } from './routes/tracked-links.js';
 import { forms } from './routes/forms.js';
+import { betaFeedback } from './routes/beta-feedback.js';
 
 export type Env = {
   Bindings: {
@@ -48,6 +49,10 @@ export type Env = {
     ALLOWED_ORIGINS: string;
     // Stealth mode: set to "true" to enable zero-width char insertion (default: disabled)
     ENABLE_STEALTH_MODE: string;
+    // Beta feedback — GitHub Issue auto-creation
+    // Set with: wrangler secret put GITHUB_TOKEN / GITHUB_REPO
+    GITHUB_TOKEN: string;
+    GITHUB_REPO: string; // e.g. "ShunsukeHayashi/line-harness-oss"
   };
 };
 
@@ -116,6 +121,7 @@ app.route('/', automations);
 app.route('/', richMenus);
 app.route('/', trackedLinks);
 app.route('/', forms);
+app.route('/', betaFeedback);
 
 // 404 fallback
 app.notFound((c) => c.json({ success: false, error: 'Not found' }, 404));
