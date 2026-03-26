@@ -37,8 +37,24 @@ jobs:
             echo "CONSTRAINTS=No design constraints defined. Follow general best practices." >> $GITHUB_ENV
           fi
 
+      # Duplicate assignment prevention: skip if Copilot is already assigned
+      - name: Check if Copilot is already assigned
+        id: check_assigned
+        run: |
+          ASSIGNEES=$(gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json assignees -q '[.assignees[].login]' 2>/dev/null || echo "[]")
+          if echo "$ASSIGNEES" | python3 -c "import sys,json; logins=[l.lower() for l in json.load(sys.stdin)]; exit(0 if any(l == 'copilot' or l.endswith('[bot]') and 'copilot' in l for l in logins) else 1)" 2>/dev/null; then
+            echo "already_assigned=true" >> $GITHUB_OUTPUT
+            echo "Copilot is already assigned to issue #${{ github.event.issue.number }}. Skipping."
+          else
+            echo "already_assigned=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+
       - name: Get issue details
         id: issue
+        if: steps.check_assigned.outputs.already_assigned == 'false'
         run: |
           gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json body -q .body > /tmp/issue_body.txt
           gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json title -q .title > /tmp/issue_title.txt
@@ -53,6 +69,7 @@ jobs:
 
       - name: Get repository ID
         id: repo_id
+        if: steps.check_assigned.outputs.already_assigned == 'false'
         run: |
           REPO_ID=$(gh api graphql -f query='
             query($owner: String!, $name: String!) {
@@ -66,6 +83,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Assign GitHub Copilot via GraphQL
+        if: steps.check_assigned.outputs.already_assigned == 'false'
         run: |
           ISSUE_NODE_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }} -q .node_id)
 
@@ -85,6 +103,13 @@ jobs:
           - Write tests if applicable
           - Create a draft PR when complete
           IMPORTANT_EOF
+
+          cat >> /tmp/instructions.txt << 'CODE_ONLY_EOF'
+          - Implement ALL changes described in the issue with actual code
+          - OUTPUT CODE ONLY: You MUST produce actual code changes. Do NOT create documentation-only PRs (doc-only PRs are prohibited).
+          - Do NOT submit a PR that only adds or edits documentation files (.md, .txt, .rst, etc.) unless the issue explicitly asks for documentation.
+          - Every PR must include at least one source code change (TypeScript, JavaScript, Python, SQL, shell scripts, or application configuration files such as wrangler.toml, package.json).
+          CODE_ONLY_EOF
 
           CUSTOM_INSTRUCTIONS=$(cat /tmp/instructions.txt)
 
@@ -114,6 +139,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Comment assignment confirmation
+        if: steps.check_assigned.outputs.already_assigned == 'false'
         run: |
           gh issue comment ${{ github.event.issue.number }} \
             --repo ${{ github.repository }} \
