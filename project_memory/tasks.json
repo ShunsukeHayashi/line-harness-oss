@@ -595,7 +595,7 @@
     {
       "id": "T37",
       "phase": "P7",
-      "priority": "high",
+      "priority": "medium",
       "subject": "Stripe本番設定 — wrangler secrets + テスト決済通過",
       "description": "T20でStripeコードは実装済みだが、wrangler secretsが未設定のため実際に課金できない。Stripeダッシュボードで商品・価格作成→ secrets設定→ テスト決済1件通過まで完了させる。※T38(法務ページ)が先行必須（Stripe本番申請にプライバシーポリシーURL必要）",
       "steps": [
@@ -616,7 +616,8 @@
       ],
       "estimate_hours": 3,
       "acceptance": "Stripeテストモードで Pro プラン購入→D1のsubscriptionsテーブルにレコード作成まで確認",
-      "status": "pending"
+      "status": "pending",
+      "note": "バイパスプラン適用中: β期間はTeachable決済で代替運用。Stripeは並行セットアップ(T42-T48)後に本番切替。T41のブロッカーではなくなった。"
     },
     {
       "id": "T38",
@@ -709,12 +710,206 @@
       "node": "MacBook Pro",
       "depends_on": [
         "T35",
-        "T37",
         "T38",
         "T39"
       ],
       "estimate_hours": 2,
       "acceptance": "10名以上がβ申込み完了、フィードバック5件以上収集",
+      "status": "pending",
+      "note": "バイパスプラン: Stripe本番化(T37)を待たずにTeachable決済で先行β開始。購入者へのplanタグ付与は手動CSV or LINE管理画面から実施。"
+    },
+    {
+      "id": "T49",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Teachable バイパス決済セットアップ — みやびラインβアクセス販売",
+      "description": "Stripe本番化(T42-T48)が完了するまでの暫定決済。Teachable上に「みやびライン Pro β」商品を作成し、購入者にLINEタグ(plan_pro)を手動付与してアクセス制御する。β期間10〜20名を想定した手動オペレーション。",
+      "steps": [
+        "Teachableダッシュボードで商品追加: 'みやびライン Pro β早期アクセス'",
+        "価格設定: ¥2,980/月（定期購読）or ¥29,800/年一括",
+        "購入完了メール: LINEアカウントURL + 友達登録手順を記載",
+        "友達登録後、管理画面から plan_pro タグを手動付与",
+        "apps/worker/src/middleware/auth.ts でplan_proタグ保持者にPro機能を解放する判定を追加",
+        "βユーザー向けオペレーション手順書（PPAL/β-ops.md）を作成",
+        "Stripe本番化後の移行フロー: 既存Teachable購入者にStripeサブスク移行案内"
+      ],
+      "file": "apps/worker/src/middleware/auth.ts",
+      "agent": "manual + kotowari-dev",
+      "node": "browser + terminal",
+      "depends_on": [
+        "T38"
+      ],
+      "estimate_hours": 3,
+      "acceptance": "TeachableでPro購入→LINE友達登録→plan_proタグ付与→Pro機能利用可能 まで手動フローが通る",
+      "status": "in_progress",
+      "note": "Stripe本番化(T48)完了後はこのバイパスを廃止し、全ユーザーをStripeサブスクに移行する"
+    },
+    {
+      "id": "T42",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Stripe アカウント本人確認（KYC）・銀行口座登録",
+      "description": "合同会社みやびのStripeアカウント開設直後の必須設定。本人確認書類提出（代表者身分証）と入金先銀行口座の登録。本番ライブモード移行の前提条件。",
+      "steps": [
+        "Stripeダッシュボード → 設定 → アカウント → 本人確認",
+        "代表者（林駿甫）の身分証明書アップロード（運転免許証 or マイナンバーカード）",
+        "法人書類：登記簿謄本または印鑑証明書アップロード",
+        "設定 → 入金 → 銀行口座を追加（口座番号・支店コード・名義人）",
+        "テスト振込で口座確認（数営業日かかる場合あり）"
+      ],
+      "file": null,
+      "agent": "manual",
+      "node": "browser",
+      "depends_on": [],
+      "estimate_hours": 1,
+      "acceptance": "Stripeダッシュボードのアカウント確認ステータスが「確認済み」になり、入金先銀行口座が登録されている",
+      "status": "pending"
+    },
+    {
+      "id": "T43",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Stripe ドメイン認証 — miyabi-ai.jp",
+      "description": "Stripe CheckoutやCustomer Portalを使用する際にドメイン認証が必要。miyabi-ai.jpのDNS設定またはメタタグでStripeに認証させる。",
+      "steps": [
+        "Stripeダッシュボード → 設定 → ドメイン → ドメインを追加",
+        "miyabi-ai.jp を入力",
+        "TXTレコードまたはHTMLメタタグをmiyabi-ai.jpのDNS/HTMLに追加",
+        "Cloudflare DNS設定でTXTレコード追加（miyabi-ai.jpがCloudflareの場合）",
+        "Stripeで「確認」ボタンをクリック → 認証完了"
+      ],
+      "file": null,
+      "agent": "manual",
+      "node": "browser",
+      "depends_on": [
+        "T42"
+      ],
+      "estimate_hours": 0.5,
+      "acceptance": "Stripeダッシュボードでmiyabi-ai.jpが「認証済み」と表示される",
+      "status": "pending"
+    },
+    {
+      "id": "T44",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Stripe 商品・価格（Price ID）作成 — Pro/Business プラン",
+      "description": "みやびラインのサブスクリプションプランをStripe Dashboardで商品として登録。Price IDを取得してWrangler secretsに設定する。",
+      "steps": [
+        "Stripeダッシュボード → 商品カタログ → + 商品を追加",
+        "商品名: 'みやびライン Pro' / 価格: ¥2,980/月 / 繰り返し請求",
+        "作成後にPrice ID（price_xxx）をコピー → STRIPE_PRO_PRICE_ID",
+        "商品名: 'みやびライン Business' / 価格: ¥9,800/月 / 繰り返し請求",
+        "作成後にPrice ID（price_xxx）をコピー → STRIPE_BUSINESS_PRICE_ID",
+        "cd apps/worker && npx wrangler secret put STRIPE_PRO_PRICE_ID",
+        "cd apps/worker && npx wrangler secret put STRIPE_BUSINESS_PRICE_ID"
+      ],
+      "file": "apps/worker/wrangler.toml",
+      "agent": "manual",
+      "node": "browser + terminal",
+      "depends_on": [
+        "T42"
+      ],
+      "estimate_hours": 1,
+      "acceptance": "STRIPE_PRO_PRICE_ID と STRIPE_BUSINESS_PRICE_ID がwrangler secrets listで確認できる",
+      "status": "pending"
+    },
+    {
+      "id": "T45",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Stripe Webhook本番エンドポイント登録 + STRIPE_WEBHOOK_SECRET 設定",
+      "description": "課金イベント（支払い成功・サブスク作成/解約）をWorkerで受信するためのWebhookエンドポイントをStripeに登録し、署名シークレットをWrangler secretsに設定する。",
+      "steps": [
+        "Stripeダッシュボード → 開発者 → Webhook → + エンドポイントを追加",
+        "エンドポイントURL: https://miyabi-line-crm.<account>.workers.dev/api/integrations/stripe/webhook",
+        "受信するイベントを選択: payment_intent.succeeded, customer.subscription.created, customer.subscription.updated, customer.subscription.deleted",
+        "エンドポイント作成後に「署名シークレット」（whsec_xxx）をコピー",
+        "cd apps/worker && npx wrangler secret put STRIPE_WEBHOOK_SECRET",
+        "ローカルテスト: stripe listen --forward-to localhost:8787/api/integrations/stripe/webhook"
+      ],
+      "file": "apps/worker/src/routes/stripe.ts",
+      "agent": "manual + kotowari-dev",
+      "node": "browser + terminal",
+      "depends_on": [
+        "T44"
+      ],
+      "estimate_hours": 1,
+      "acceptance": "STRIPE_WEBHOOK_SECRET がwrangler secrets listで確認でき、Stripeテストイベント送信でWorkerが200を返す",
+      "status": "pending"
+    },
+    {
+      "id": "T46",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Stripe テスト決済検証 — Pro/Businessプラン購入フロー確認",
+      "description": "全secretsを設定後、テストカードを使って実際の購入フローを検証。D1のsubscriptionsテーブルへの書き込みとWebhook処理を確認する。",
+      "steps": [
+        "テストカード: 4242 4242 4242 4242 / 任意の有効期限 / 任意のCVC",
+        "Proプランの購入フローを実行（Stripe Checkout or API経由）",
+        "Webhook受信ログを確認: wrangler tail miyabi-line-crm",
+        "D1確認: SELECT * FROM subscriptions ORDER BY created_at DESC LIMIT 5",
+        "Businessプランも同様に検証",
+        "サブスクリプション解約フロー（customer.subscription.deleted）も確認"
+      ],
+      "file": "apps/worker/src/routes/stripe.ts",
+      "agent": "kotowari-dev",
+      "node": "terminal",
+      "depends_on": [
+        "T45"
+      ],
+      "estimate_hours": 2,
+      "acceptance": "テストモードでPro/Businessプラン購入→subscriptionsテーブル書き込み→解約→status='canceled' まで全確認",
+      "status": "pending"
+    },
+    {
+      "id": "T47",
+      "phase": "P7",
+      "priority": "medium",
+      "subject": "Stripe 税率・メール・ブランディング設定",
+      "description": "日本の消費税（10%）自動計算の設定、請求書メールの日本語カスタマイズ、Stripe Checkoutにみやびラインのロゴとブランドカラーを設定する。",
+      "steps": [
+        "設定 → 税金 → 税の設定を有効化 → 日本・消費税10%",
+        "設定 → メール → 領収書・請求書のメール送信を有効化",
+        "メールのFromアドレスをみやびライン用に変更",
+        "設定 → ブランディング → ロゴ・アクセントカラー設定（#みやびカラー）",
+        "設定 → Customer portal → セルフサービスでのプラン変更・解約を有効化"
+      ],
+      "file": null,
+      "agent": "manual",
+      "node": "browser",
+      "depends_on": [
+        "T44"
+      ],
+      "estimate_hours": 1,
+      "acceptance": "Stripeのテスト請求書に消費税10%が含まれ、みやびラインのロゴが表示される",
+      "status": "pending"
+    },
+    {
+      "id": "T48",
+      "phase": "P7",
+      "priority": "medium",
+      "subject": "Stripe 本番モード切替 — sk_live_ / pk_live_ への移行",
+      "description": "T46のテスト検証完了・T42のKYC承認後に本番ライブモードへ切替。sk_test_ → sk_live_ への更新とWorkerへの反映。",
+      "steps": [
+        "Stripeダッシュボード → APIキー → 本番キー（sk_live_xxx）を取得",
+        "cd apps/worker && npx wrangler secret put STRIPE_SECRET_KEY（sk_live_で上書き）",
+        "本番用Webhookエンドポイントの署名シークレット（whsec_live_xxx）を取得",
+        "npx wrangler secret put STRIPE_WEBHOOK_SECRET（本番用で上書き）",
+        "本番用Price IDを作成してSTRIPE_PRO_PRICE_ID / STRIPE_BUSINESS_PRICE_IDを更新",
+        "apps/web/.env.local の NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY を pk_live_xxx に更新",
+        "本番環境でライブ決済テスト（少額）を実施"
+      ],
+      "file": "apps/worker/src/routes/stripe.ts",
+      "agent": "manual + kotowari-dev",
+      "node": "terminal",
+      "depends_on": [
+        "T42",
+        "T43",
+        "T46",
+        "T47"
+      ],
+      "estimate_hours": 2,
+      "acceptance": "本番モードでの実際の課金が成功し、銀行口座への入金が確認できる",
       "status": "pending"
     }
   ],
