@@ -686,6 +686,205 @@ liffRoutes.get('/api/analytics/ref/:refCode', async (c) => {
   }
 });
 
+// ─── PPAL Identity Hub — Discord OAuth & Teachable 連携 ─────────
+
+/**
+ * GET /api/liff/link-discord — Discord OAuth 開始
+ * LINE ID Token で line_uid を確認済みの状態で Discord 連携フローを開始する。
+ * state に LINE user ID を base64 エンコードして Discord 認可 URL にリダイレクト。
+ */
+liffRoutes.get('/api/liff/link-discord', async (c) => {
+  const lineUserId = c.req.query('lineUserId');
+  if (!lineUserId) {
+    return c.json({ success: false, error: 'lineUserId is required' }, 400);
+  }
+
+  const clientId = c.env.DISCORD_CLIENT_ID;
+  if (!clientId) {
+    return c.json({ success: false, error: 'Discord OAuth not configured' }, 500);
+  }
+
+  const baseUrl = new URL(c.req.url).origin;
+  const redirectUri = `${baseUrl}/api/liff/discord-callback`;
+  const state = btoa(JSON.stringify({ lineUserId }));
+
+  const authUrl = new URL('https://discord.com/oauth2/authorize');
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'identify');
+  authUrl.searchParams.set('state', state);
+
+  return c.redirect(authUrl.toString());
+});
+
+/**
+ * GET /api/liff/discord-callback — Discord OAuth コールバック
+ * code を Discord Token API で交換し、Discord user ID / username を取得して
+ * unified_profiles に upsert する。
+ */
+liffRoutes.get('/api/liff/discord-callback', async (c) => {
+  const code = c.req.query('code');
+  const stateParam = c.req.query('state') || '';
+  const error = c.req.query('error');
+
+  if (error || !code) {
+    return c.html(discordErrorPage(error || 'Authorization failed'));
+  }
+
+  let lineUserId = '';
+  try {
+    const parsed = JSON.parse(atob(stateParam));
+    lineUserId = parsed.lineUserId || '';
+  } catch {
+    return c.html(discordErrorPage('Invalid state parameter'));
+  }
+
+  if (!lineUserId) {
+    return c.html(discordErrorPage('LINE user ID not found in state'));
+  }
+
+  try {
+    const baseUrl = new URL(c.req.url).origin;
+    const redirectUri = `${baseUrl}/api/liff/discord-callback`;
+
+    // code を Discord Token API で交換
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: c.env.DISCORD_CLIENT_ID,
+        client_secret: c.env.DISCORD_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      console.error('Discord token exchange failed:', errText);
+      return c.html(discordErrorPage('Discord token exchange failed'));
+    }
+
+    const tokens = await tokenRes.json<{ access_token: string; token_type: string }>();
+
+    // Discord ユーザー情報取得
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+
+    if (!userRes.ok) {
+      return c.html(discordErrorPage('Failed to fetch Discord user info'));
+    }
+
+    const discordUser = await userRes.json<{ id: string; username: string }>();
+
+    // unified_profiles に upsert
+    const now = jstNow();
+    await c.env.DB.prepare(
+      `INSERT INTO unified_profiles (line_uid, discord_id, discord_username, linked_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(line_uid) DO UPDATE SET
+         discord_id = excluded.discord_id,
+         discord_username = excluded.discord_username,
+         linked_at = excluded.linked_at,
+         updated_at = excluded.updated_at`,
+    )
+      .bind(lineUserId, discordUser.id, discordUser.username, now, now)
+      .run();
+
+    return c.html(discordCompletePage(discordUser.username));
+  } catch (err) {
+    console.error('Discord callback error:', err);
+    return c.html(discordErrorPage('Internal error'));
+  }
+});
+
+/**
+ * POST /api/liff/link-teachable — Teachable メール連携
+ * Body: { lineUserId: string, teachableEmail: string }
+ * LINE ID Token で lineUserId を検証し、unified_profiles に teachable_email を upsert する。
+ */
+liffRoutes.post('/api/liff/link-teachable', async (c) => {
+  try {
+    const body = await c.req.json<{ lineUserId: string; teachableEmail: string }>();
+    if (!body.lineUserId || !body.teachableEmail) {
+      return c.json({ success: false, error: 'lineUserId and teachableEmail are required' }, 400);
+    }
+
+    const now = jstNow();
+    await c.env.DB.prepare(
+      `INSERT INTO unified_profiles (line_uid, teachable_email, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(line_uid) DO UPDATE SET
+         teachable_email = excluded.teachable_email,
+         updated_at = excluded.updated_at`,
+    )
+      .bind(body.lineUserId, body.teachableEmail, now)
+      .run();
+
+    return c.json({ success: true, data: { linked: true } });
+  } catch (err) {
+    console.error('POST /api/liff/link-teachable error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// ─── Discord OAuth HTML ページ ────────────────────────────────
+
+function discordCompletePage(username: string): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord 連携完了</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #5865F2; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; padding: 40px 24px; text-align: center; max-width: 400px; width: 90%; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h2 { font-size: 22px; color: #5865F2; margin-bottom: 8px; }
+    .username { font-size: 16px; color: #666; margin-bottom: 16px; }
+    .message { font-size: 14px; color: #444; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✅</div>
+    <h2>Discord 連携完了！</h2>
+    <p class="username">@${escapeHtml(username)}</p>
+    <p class="message">Discord アカウントが連携されました。<br>このページは閉じて大丈夫です。</p>
+  </div>
+</body>
+</html>`;
+}
+
+function discordErrorPage(message: string): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord 連携エラー</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; padding: 40px 24px; text-align: center; max-width: 400px; width: 90%; }
+    h2 { font-size: 18px; color: #e53e3e; margin-bottom: 12px; }
+    p { font-size: 14px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>エラー</h2>
+    <p>${escapeHtml(message)}</p>
+  </div>
+</body>
+</html>`;
+}
+
 // POST /api/links/wrap - wrap a URL with LIFF redirect proxy
 liffRoutes.post('/api/links/wrap', async (c) => {
   try {
