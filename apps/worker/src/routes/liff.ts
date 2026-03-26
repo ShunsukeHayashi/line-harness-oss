@@ -712,6 +712,263 @@ liffRoutes.post('/api/links/wrap', async (c) => {
   }
 });
 
+// ─── Discord OAuth (Identity Hub — Phase 4) ─────────────────────
+//
+// Security design:
+//  1. state = HMAC-SHA-256(LINE_CHANNEL_SECRET, JSON({lineUserId, nonce, exp}))
+//     — binds the LINE identity to the callback so an attacker cannot substitute
+//       a different lineUserId after the redirect.
+//  2. lineUserId is extracted exclusively from the server-side-verified LINE ID
+//     token; it is never accepted from client-supplied query/body params.
+//  3. DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET are optional env vars — the
+//     endpoints return 503 when unconfigured so the rest of the app is unaffected.
+
+/** Import LINE_CHANNEL_SECRET as an HMAC-SHA-256 signing key. */
+async function importDiscordStateKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify'],
+  );
+}
+
+type DiscordStatePayload = { lineUserId: string; nonce: string; exp: number };
+
+/**
+ * Sign a Discord OAuth state payload with HMAC-SHA-256.
+ * Returns base64(JSON({d: dataJson, s: hexSig})).
+ */
+async function signDiscordState(
+  secret: string,
+  payload: DiscordStatePayload,
+): Promise<string> {
+  const dataStr = JSON.stringify(payload);
+  const key = await importDiscordStateKey(secret);
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(dataStr));
+  const sigHex = Array.from(new Uint8Array(sigBuf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return btoa(JSON.stringify({ d: dataStr, s: sigHex }));
+}
+
+/**
+ * Verify a Discord OAuth state.
+ * Returns the parsed payload or null if the signature is invalid or the state
+ * has expired (10-minute window).
+ */
+async function verifyDiscordState(
+  secret: string,
+  stateParam: string,
+): Promise<DiscordStatePayload | null> {
+  try {
+    const wrapper = JSON.parse(atob(stateParam)) as { d: string; s: string };
+    const key = await importDiscordStateKey(secret);
+    const sigBytes = new Uint8Array(
+      wrapper.s.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+    );
+    const valid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      sigBytes,
+      new TextEncoder().encode(wrapper.d),
+    );
+    if (!valid) return null;
+    const payload = JSON.parse(wrapper.d) as DiscordStatePayload;
+    if (Date.now() > payload.exp) return null; // expired
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify a LINE ID token by trying all configured Login Channel IDs.
+ * Returns the LINE User ID (sub claim) or null if the token is invalid.
+ * Uses the same multi-account pattern as POST /api/liff/link.
+ */
+async function verifyLineIdTokenForDiscord(
+  db: D1Database,
+  idToken: string,
+  defaultChannelId: string,
+): Promise<string | null> {
+  const channelIds = [defaultChannelId];
+  const dbAccounts = await getLineAccounts(db);
+  for (const acct of dbAccounts) {
+    if (acct.login_channel_id && !channelIds.includes(acct.login_channel_id)) {
+      channelIds.push(acct.login_channel_id);
+    }
+  }
+  for (const channelId of channelIds) {
+    const res = await fetch('https://api.line.me/oauth2/v2.1/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ id_token: idToken, client_id: channelId }),
+    });
+    if (res.ok) {
+      const payload = await res.json<{ sub: string }>();
+      return payload.sub;
+    }
+  }
+  return null;
+}
+
+/**
+ * GET /api/liff/discord/authorize
+ *
+ * Step 1 of the Discord OAuth link flow.
+ * Verifies the caller's LINE ID token (server-side), then redirects to
+ * Discord's OAuth consent page with an HMAC-signed state.
+ *
+ * Query params:
+ *   idToken — LINE ID token obtained from LIFF.getIDToken() (required)
+ */
+liffRoutes.get('/api/liff/discord/authorize', async (c) => {
+  const clientId = c.env.DISCORD_CLIENT_ID;
+  if (!clientId) {
+    return c.json({ success: false, error: 'Discord OAuth is not configured' }, 503);
+  }
+
+  const idToken = c.req.query('idToken');
+  if (!idToken) {
+    return c.json({ success: false, error: 'idToken is required' }, 400);
+  }
+
+  // lineUserId must come from the server-side-verified token — never from query params.
+  const lineUserId = await verifyLineIdTokenForDiscord(
+    c.env.DB,
+    idToken,
+    c.env.LINE_LOGIN_CHANNEL_ID,
+  );
+  if (!lineUserId) {
+    return c.json({ success: false, error: 'Invalid LINE ID token' }, 401);
+  }
+
+  // HMAC-signed state: binds lineUserId to the callback and prevents CSRF.
+  const state = await signDiscordState(c.env.LINE_CHANNEL_SECRET, {
+    lineUserId,
+    nonce: crypto.randomUUID(),
+    exp: Date.now() + 600_000, // 10-minute window
+  });
+
+  const baseUrl = new URL(c.req.url).origin;
+  const callbackUrl = `${baseUrl}/api/liff/discord/callback`;
+
+  const authUrl = new URL('https://discord.com/oauth2/authorize');
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('redirect_uri', callbackUrl);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'identify');
+  authUrl.searchParams.set('state', state);
+
+  return c.redirect(authUrl.toString());
+});
+
+/**
+ * GET /api/liff/discord/callback
+ *
+ * Step 2 of the Discord OAuth link flow.
+ * Verifies the HMAC state, exchanges the authorization code for an access
+ * token, fetches the Discord user, and upserts unified_profiles.
+ */
+liffRoutes.get('/api/liff/discord/callback', async (c) => {
+  const code = c.req.query('code');
+  const stateParam = c.req.query('state') || '';
+  const error = c.req.query('error');
+
+  if (error || !code) {
+    return c.html(errorPage(error || 'Discord authorization failed'));
+  }
+
+  // Verify HMAC state — also checks expiry and implicitly validates anti-CSRF.
+  const statePayload = await verifyDiscordState(c.env.LINE_CHANNEL_SECRET, stateParam);
+  if (!statePayload) {
+    return c.html(errorPage('Invalid or expired state — please try linking again'));
+  }
+  // lineUserId was set at authorize time from a server-verified LINE ID token.
+  const { lineUserId } = statePayload;
+
+  const clientId = c.env.DISCORD_CLIENT_ID;
+  const clientSecret = c.env.DISCORD_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return c.html(errorPage('Discord OAuth is not configured'));
+  }
+
+  try {
+    const baseUrl = new URL(c.req.url).origin;
+    const callbackUrl = `${baseUrl}/api/liff/discord/callback`;
+
+    // Exchange authorization code for access token.
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: callbackUrl,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      console.error('Discord token exchange failed:', errText);
+      return c.html(errorPage('Discord token exchange failed'));
+    }
+
+    const tokenData = await tokenRes.json<{ access_token: string }>();
+
+    // Fetch Discord user identity (id + username).
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+
+    if (!userRes.ok) {
+      return c.html(errorPage('Failed to fetch Discord user info'));
+    }
+
+    const discordUser = await userRes.json<{
+      id: string;
+      username: string;
+      discriminator?: string;
+    }>();
+    const discordId = discordUser.id;
+    // discriminator '0' means the new username system (no #tag suffix).
+    const discordUsername =
+      discordUser.discriminator && discordUser.discriminator !== '0'
+        ? `${discordUser.username}#${discordUser.discriminator}`
+        : discordUser.username;
+
+    // Upsert unified_profiles: link LINE user → Discord account.
+    // linked_at is set only on the first link (COALESCE preserves existing value).
+    const now = jstNow();
+    await c.env.DB.prepare(
+      `INSERT INTO unified_profiles
+         (line_uid, discord_id, discord_username, linked_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(line_uid) DO UPDATE SET
+         discord_id       = excluded.discord_id,
+         discord_username = excluded.discord_username,
+         linked_at        = COALESCE(unified_profiles.linked_at, excluded.linked_at),
+         updated_at       = excluded.updated_at`,
+    )
+      .bind(lineUserId, discordId, discordUsername, now, now, now)
+      .run();
+
+    // Redirect to LIFF deep-link if configured, otherwise show completion page.
+    const liffLinkUrl = c.env.LIFF_LINK_URL;
+    if (liffLinkUrl) {
+      return c.redirect(liffLinkUrl);
+    }
+    return c.html(discordLinkCompletionPage(discordUsername));
+  } catch (err) {
+    console.error('Discord OAuth callback error:', err);
+    return c.html(errorPage('Internal error'));
+  }
+});
+
 // ─── HTML Templates ─────────────────────────────────────────────
 
 function authLandingPage(liffUrl: string, oauthUrl: string): string {
@@ -819,6 +1076,34 @@ function completionPage(displayName: string, pictureUrl: string | null, ref: str
     </div>
     <p class="message">ありがとうございます！<br>これからお役立ち情報をお届けします。<br>このページは閉じて大丈夫です。</p>
     ${ref ? `<p class="ref">${escapeHtml(ref)}</p>` : ''}
+  </div>
+</body>
+</html>`;
+}
+
+function discordLinkCompletionPage(discordUsername: string): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord 連携完了</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #5865F2; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; padding: 40px 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); text-align: center; max-width: 400px; width: 90%; }
+    .check { width: 64px; height: 64px; border-radius: 50%; background: #5865F2; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
+    h2 { font-size: 20px; color: #5865F2; margin-bottom: 8px; }
+    .name { font-size: 16px; font-weight: 600; color: #333; margin: 8px 0 12px; }
+    .message { font-size: 14px; color: #666; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">&#10003;</div>
+    <h2>Discord 連携完了</h2>
+    <p class="name">${escapeHtml(discordUsername)}</p>
+    <p class="message">Discord アカウントの連携が完了しました。<br>このページは閉じて大丈夫です。</p>
   </div>
 </body>
 </html>`;
