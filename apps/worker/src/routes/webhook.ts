@@ -361,4 +361,111 @@ async function handleEvent(
   }
 }
 
+// ======== Teachable Webhook ========
+
+// Timing-safe string comparison — prevents token leak via response timing.
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+webhook.post('/api/webhooks/teachable', async (c) => {
+  // 1. Authorization: Bearer <TEACHABLE_WEBHOOK_SECRET> validation.
+  //    Using the Authorization header (not a query param) keeps the secret
+  //    out of server logs and browser history.
+  const webhookSecret = c.env.TEACHABLE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('TEACHABLE_WEBHOOK_SECRET is not configured');
+    return c.json({ error: 'Service unavailable' }, 503);
+  }
+  const authHeader = c.req.header('Authorization') ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!timingSafeEqual(token, webhookSecret)) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  // 2. Parse body
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  const payload = body as {
+    event?: string;
+    data?: { object?: { email?: string } };
+  };
+
+  // Ignore non-sale.created events silently
+  if (payload.event !== 'sale.created') {
+    return c.json({ status: 'ignored' }, 200);
+  }
+
+  // 3. Email format validation
+  const email = payload.data?.object?.email ?? '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return c.json({ error: 'Invalid or missing email' }, 400);
+  }
+
+  const db = c.env.DB;
+
+  // Look up unified_profiles by teachable_email
+  const profile = await db
+    .prepare(
+      `SELECT line_uid, line_message_sent_at
+         FROM unified_profiles
+        WHERE teachable_email = ?
+        LIMIT 1`,
+    )
+    .bind(email)
+    .first<{ line_uid: string; line_message_sent_at: string | null }>();
+
+  if (!profile) {
+    // Teachable user has not linked their LINE account yet.
+    return c.json({ status: 'no_linked_user' }, 200);
+  }
+
+  // 4. Idempotency: skip if LINE message was already sent for this purchase
+  if (profile.line_message_sent_at) {
+    return c.json({ status: 'already_sent' }, 200);
+  }
+
+  const lineUserId = profile.line_uid;
+  const now = jstNow();
+
+  // 5. Update DB FIRST before sending.
+  //    Recording the send intent before the actual push prevents duplicates if
+  //    the worker crashes between a successful pushMessage and the DB write.
+  //    A failed pushMessage after this UPDATE is the safer failure mode.
+  await db
+    .prepare(
+      `UPDATE unified_profiles
+          SET line_message_sent_at = ?,
+              updated_at            = ?
+        WHERE line_uid = ?`,
+    )
+    .bind(now, now, lineUserId)
+    .run();
+
+  // 6. Send LINE push message after the idempotency record is committed
+  try {
+    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    await lineClient.pushMessage(lineUserId, [
+      buildMessage('text', 'ご購入ありがとうございます！\nコースへのアクセス権が付与されました。引き続きよろしくお願いします。'),
+    ]);
+  } catch (err) {
+    // DB is already updated — log the error but return 200 so Teachable does not
+    // retry (a retry would be a no-op due to the idempotency guard above).
+    console.error('Teachable webhook: pushMessage failed for', lineUserId, err);
+  }
+
+  return c.json({ status: 'ok' }, 200);
+});
+
 export { webhook };
+

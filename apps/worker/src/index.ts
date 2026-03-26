@@ -57,6 +57,7 @@ export type Env = {
     DISCORD_CLIENT_ID?: string;
     DISCORD_CLIENT_SECRET?: string;   // secret — use `wrangler secret put`
     LIFF_LINK_URL?: string;
+    TEACHABLE_WEBHOOK_SECRET?: string; // secret — use `wrangler secret put`
   };
 };
 
