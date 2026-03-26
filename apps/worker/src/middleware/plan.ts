@@ -25,6 +25,8 @@ export async function getPlan(db: D1Database, friendId: string): Promise<Plan> {
       `SELECT t.name FROM friend_tags ft
        JOIN tags t ON ft.tag_id = t.id
        WHERE ft.friend_id = ? AND t.name IN ('plan_business', 'plan_pro')
+       -- ASC order gives 'plan_business' < 'plan_pro' alphabetically,
+       -- so business wins over pro when both tags are present.
        ORDER BY t.name ASC
        LIMIT 1`,
     )

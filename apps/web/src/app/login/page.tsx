@@ -71,9 +71,9 @@ export default function LoginPage() {
               className="mt-0.5 h-4 w-4 rounded border-gray-300 text-green-500 focus:ring-green-500"
             />
             <label htmlFor="agree" className="text-xs text-gray-600 leading-relaxed">
-              <a href="/terms" target="_blank" className="text-green-600 underline">利用規約</a>
+              <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-green-600 underline">利用規約</a>
               および
-              <a href="/privacy" target="_blank" className="text-green-600 underline">プライバシーポリシー</a>
+              <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-green-600 underline">プライバシーポリシー</a>
               に同意します
             </label>
           </div>

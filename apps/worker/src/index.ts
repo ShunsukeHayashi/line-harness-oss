@@ -54,9 +54,9 @@ export type Env = {
     ENABLE_STEALTH_MODE?: string;
     TELEGRAM_BOT_TOKEN?: string;
     TELEGRAM_CHAT_ID?: string;
-    DISCORD_CLIENT_ID: string;
-    DISCORD_CLIENT_SECRET: string;
-    LIFF_LINK_URL: string;
+    DISCORD_CLIENT_ID?: string;
+    DISCORD_CLIENT_SECRET?: string;
+    LIFF_LINK_URL?: string;
   };
 };
 
