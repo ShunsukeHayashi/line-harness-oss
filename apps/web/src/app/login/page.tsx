@@ -1,11 +1,13 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 
 export default function LoginPage() {
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [agreed, setAgreed] = useState(false)
   const router = useRouter()
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -61,9 +63,25 @@ export default function LoginPage() {
             <p className="text-sm text-red-600 mb-4">{error}</p>
           )}
 
+          <div className="flex items-start mb-4">
+            <input
+              id="agree"
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="mt-0.5 mr-2 h-4 w-4 rounded border-gray-300 accent-green-500"
+            />
+            <label htmlFor="agree" className="text-sm text-gray-600">
+              <Link href="/terms" className="text-green-600 underline hover:opacity-80">利用規約</Link>
+              {' および '}
+              <Link href="/privacy" className="text-green-600 underline hover:opacity-80">プライバシーポリシー</Link>
+              {' に同意します'}
+            </label>
+          </div>
+
           <button
             type="submit"
-            disabled={loading || !apiKey}
+            disabled={loading || !apiKey || !agreed}
             className="w-full py-3 text-white font-medium rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ backgroundColor: '#06C755' }}
           >
