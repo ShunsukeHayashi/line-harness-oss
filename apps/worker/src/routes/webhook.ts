@@ -361,4 +361,127 @@ async function handleEvent(
   }
 }
 
+// ======== Teachable Webhook ========
+
+// HMAC-SHA256 both tokens before comparing so crypto.subtle.timingSafeEqual
+// always operates on equal-length 32-byte digests, preventing length leaks.
+async function verifyBearerToken(given: string, expected: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode('miyabi-line-webhook-hmac-key'),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const [a, b] = await Promise.all([
+    crypto.subtle.sign('HMAC', key, enc.encode(given)),
+    crypto.subtle.sign('HMAC', key, enc.encode(expected)),
+  ]);
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
+webhook.post('/api/webhooks/teachable', async (c) => {
+  // 1. Authorization: Bearer <TEACHABLE_WEBHOOK_SECRET> validation.
+  //    Using the Authorization header (not a query param) keeps the secret
+  //    out of server logs and browser history.
+  const webhookSecret = c.env.TEACHABLE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('TEACHABLE_WEBHOOK_SECRET is not configured');
+    return c.json({ error: 'Service unavailable' }, 503);
+  }
+  const authHeader = c.req.header('Authorization') ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!(await verifyBearerToken(token, webhookSecret))) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  // 2. Parse body
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  // 3. Runtime type guards — avoid unsafe `as` assertions on untrusted input
+  if (typeof body !== 'object' || body === null) {
+    return c.json({ error: 'Invalid payload' }, 400);
+  }
+  const payload = body as Record<string, unknown>;
+
+  // Ignore non-sale.created events silently
+  if (payload['event'] !== 'sale.created') {
+    return c.json({ status: 'ignored' }, 200);
+  }
+
+  // 4. Email format validation — walk the object graph with type checks
+  const dataObj = payload['data'];
+  const saleObj =
+    typeof dataObj === 'object' && dataObj !== null
+      ? (dataObj as Record<string, unknown>)['object']
+      : undefined;
+  const rawEmail =
+    typeof saleObj === 'object' && saleObj !== null
+      ? (saleObj as Record<string, unknown>)['email']
+      : undefined;
+  if (typeof rawEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+    return c.json({ error: 'Invalid or missing email' }, 400);
+  }
+  // Normalize to lowercase so DB lookup is case-insensitive.
+  const email = rawEmail.toLowerCase();
+
+  const db = c.env.DB;
+  const now = jstNow();
+
+  // 5. Atomic idempotency — single conditional UPDATE eliminates the
+  //    TOCTOU race that existed in a separate SELECT + UPDATE pair.
+  //    If line_message_sent_at is already set, or no row matches the email,
+  //    RETURNING returns no rows → claimed is null → safe 200 early-exit.
+  //    AND line_uid IS NOT NULL ensures we only process LINE-linked profiles,
+  //    preventing a pushMessage call with a NULL user ID.
+  //    Per-profile idempotency is intentional: each unified_profiles row
+  //    tracks its own send state independently.
+  const claimed = await db
+    .prepare(
+      `UPDATE unified_profiles
+          SET line_message_sent_at = ?,
+              updated_at            = ?
+        WHERE teachable_email = ?
+          AND line_message_sent_at IS NULL
+          AND line_uid IS NOT NULL
+        RETURNING line_uid`,
+    )
+    .bind(now, now, email)
+    .first<{ line_uid: string }>();
+
+  if (!claimed) {
+    // Either no linked LINE user or message already dispatched — safe to 200.
+    return c.json({ status: 'already_sent_or_no_user' }, 200);
+  }
+
+  const lineUserId = claimed.line_uid;
+
+  // 6. Send LINE push message after the idempotency record is committed.
+  //    On failure, rollback line_message_sent_at so Teachable can retry.
+  try {
+    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    await lineClient.pushMessage(lineUserId, [
+      buildMessage('text', 'ご購入ありがとうございます！\nコースへのアクセス権が付与されました。引き続きよろしくお願いします。'),
+    ]);
+  } catch (err) {
+    console.error('Teachable webhook: pushMessage failed for', lineUserId, err);
+    // Rollback the idempotency flag so Teachable retries can succeed.
+    // Scope the rollback to the exact profile that was claimed to avoid
+    // unintended resets if multiple profiles share the same teachable_email.
+    await db
+      .prepare('UPDATE unified_profiles SET line_message_sent_at = NULL WHERE teachable_email = ? AND line_uid = ?')
+      .bind(email, lineUserId)
+      .run();
+    return c.json({ error: 'Delivery failed' }, 502);
+  }
+
+  return c.json({ status: 'ok' }, 200);
+});
+
 export { webhook };
