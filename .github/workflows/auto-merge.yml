@@ -39,22 +39,48 @@ jobs:
             exit 0
           fi
           
-          PR_DATA=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json state,mergeable,reviewDecision,statusCheckRollup,labels)
+          PR_DATA=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json state,isDraft,mergeable,reviewDecision,reviews,statusCheckRollup,labels,author)
           
           STATE=$(echo "$PR_DATA" | jq -r '.state')
+          IS_DRAFT=$(echo "$PR_DATA" | jq -r '.isDraft')
           MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')
           REVIEW_DECISION=$(echo "$PR_DATA" | jq -r '.reviewDecision')
-          CHECKS_PASS=$(echo "$PR_DATA" | jq -r '[.statusCheckRollup[] | select(.conclusion != "SUCCESS" and .conclusion != "SKIPPED")] | length == 0')
+          AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.author.login')
           HAS_NEEDS_HUMAN=$(echo "$PR_DATA" | jq -r '[.labels[] | select(.name == "needs-human")] | length > 0')
           
+          # Check if PR author is Copilot (copilot, copilot[bot], or app/copilot-swe-agent)
+          IS_COPILOT=$(echo "$PR_DATA" | jq -r 'if (.author.login | ascii_downcase | test("copilot")) then "true" else "false" end')
+          
+          # Check required CI checks: "Type Check" and "Build Check" must be SUCCESS
+          TYPE_CHECK=$(echo "$PR_DATA" | jq -r '[.statusCheckRollup[] | select(.name == "Type Check" and .conclusion == "SUCCESS")] | length > 0')
+          BUILD_CHECK=$(echo "$PR_DATA" | jq -r '[.statusCheckRollup[] | select(.name == "Build Check" and .conclusion == "SUCCESS")] | length > 0')
+          
+          # Check no CHANGES_REQUESTED reviews remain (only latest review per reviewer)
+          HAS_CHANGES_REQUESTED=$(echo "$PR_DATA" | jq -r '[.reviews | group_by(.author.login)[] | sort_by(.submittedAt) | last | select(.state == "CHANGES_REQUESTED")] | length > 0')
+          
           echo "State: $STATE"
+          echo "Is Draft: $IS_DRAFT"
           echo "Mergeable: $MERGEABLE"
           echo "Review Decision: $REVIEW_DECISION"
-          echo "Checks Pass: $CHECKS_PASS"
+          echo "Author: $AUTHOR_LOGIN"
+          echo "Is Copilot: $IS_COPILOT"
+          echo "Type Check: $TYPE_CHECK"
+          echo "Build Check: $BUILD_CHECK"
           echo "Has needs-human: $HAS_NEEDS_HUMAN"
+          echo "Has CHANGES_REQUESTED: $HAS_CHANGES_REQUESTED"
           
           if [ "$STATE" != "OPEN" ]; then
             echo "PR is not open"
+            exit 0
+          fi
+          
+          if [ "$IS_DRAFT" == "true" ]; then
+            echo "PR is a draft, skipping auto-merge"
+            exit 0
+          fi
+          
+          if [ "$IS_COPILOT" != "true" ]; then
+            echo "PR author ($AUTHOR_LOGIN) is not Copilot, skipping auto-merge"
             exit 0
           fi
           
@@ -63,7 +89,12 @@ jobs:
             exit 0
           fi
           
-          if [ "$MERGEABLE" == "MERGEABLE" ] && [ "$REVIEW_DECISION" == "APPROVED" ] && [ "$CHECKS_PASS" == "true" ]; then
+          if [ "$HAS_CHANGES_REQUESTED" == "true" ]; then
+            echo "PR has CHANGES_REQUESTED review, skipping auto-merge"
+            exit 0
+          fi
+          
+          if [ "$MERGEABLE" == "MERGEABLE" ] && [ "$REVIEW_DECISION" == "APPROVED" ] && [ "$TYPE_CHECK" == "true" ] && [ "$BUILD_CHECK" == "true" ]; then
             echo "can_merge=true" >> $GITHUB_OUTPUT
           else
             echo "can_merge=false" >> $GITHUB_OUTPUT
