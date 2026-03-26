@@ -884,6 +884,7 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
   const error = c.req.query('error');
 
   if (error || !code) {
+    // errorPage() calls escapeHtml() on the message — safe to pass Discord's error code here.
     return c.html(errorPage(error || 'Discord authorization failed'));
   }
 
@@ -953,8 +954,19 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
         ? `${discordUser.username}#${discordUser.discriminator}`
         : discordUser.username;
 
+    // 1:1 identity constraint — one Discord account must map to exactly one LINE user.
+    // Reject if this discord_id is already linked to a *different* line_uid.
+    const conflicting = await c.env.DB
+      .prepare(`SELECT line_uid FROM unified_profiles WHERE discord_id = ? LIMIT 1`)
+      .bind(discordId)
+      .first<{ line_uid: string }>();
+    if (conflicting && conflicting.line_uid !== lineUserId) {
+      return c.html(errorPage('This Discord account is already linked to another LINE user'));
+    }
+
     // Upsert unified_profiles: link LINE user → Discord account.
-    // linked_at is set only on the first link (COALESCE preserves existing value).
+    // linked_at always records when this specific link was (re-)established so
+    // that re-linking with a different Discord account updates the timestamp.
     const now = jstNow();
     await c.env.DB.prepare(
       `INSERT INTO unified_profiles
@@ -963,7 +975,7 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
        ON CONFLICT(line_uid) DO UPDATE SET
          discord_id       = excluded.discord_id,
          discord_username = excluded.discord_username,
-         linked_at        = COALESCE(unified_profiles.linked_at, excluded.linked_at),
+         linked_at        = excluded.linked_at,
          updated_at       = excluded.updated_at`,
     )
       .bind(lineUserId, discordId, discordUsername, now, now, now)
