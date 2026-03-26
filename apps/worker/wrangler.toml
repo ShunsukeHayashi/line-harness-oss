@@ -26,6 +26,8 @@ LINE_LOGIN_CHANNEL_ID = "2008491323"
 ALLOWED_ORIGINS    = "https://miyabi-line-admin.pages.dev"
 ENABLE_STEALTH_MODE = "false"
 WORKER_URL = "https://miyabi-line-crm.supernovasyun.workers.dev"
+# DISCORD_CLIENT_ID: set via wrangler secret put or dashboard (plain var, not secret)
+DISCORD_CLIENT_ID = ""
 
 [[d1_databases]]
 binding      = "DB"

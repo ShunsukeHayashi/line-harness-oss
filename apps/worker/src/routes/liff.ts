@@ -852,4 +852,168 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ─── PPAL Identity Hub — Discord OAuth ──────────────────────────
+
+/**
+ * GET /api/liff/link-discord
+ * Redirects to Discord Authorization URL.
+ * Query param: ?lineUserId=<LINE user ID>
+ */
+liffRoutes.get('/api/liff/link-discord', (c) => {
+  const lineUserId = c.req.query('lineUserId');
+  if (!lineUserId) {
+    return c.json({ success: false, error: 'lineUserId is required' }, 400);
+  }
+
+  const redirectUri = `${c.env.WORKER_URL}/api/liff/discord-callback`;
+  const state = btoa(JSON.stringify({ lineUserId }));
+
+  const authUrl = new URL('https://discord.com/api/oauth2/authorize');
+  authUrl.searchParams.set('client_id', c.env.DISCORD_CLIENT_ID);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'identify');
+  authUrl.searchParams.set('state', state);
+
+  return c.redirect(authUrl.toString(), 302);
+});
+
+/**
+ * GET /api/liff/discord-callback
+ * Discord OAuth callback: exchanges code, fetches user, upserts unified_profiles.
+ */
+liffRoutes.get('/api/liff/discord-callback', async (c) => {
+  const code = c.req.query('code');
+  const stateParam = c.req.query('state') || '';
+  const error = c.req.query('error');
+
+  if (error || !code) {
+    return c.html(errorPage(error || 'Discord authorization failed'));
+  }
+
+  let lineUserId = '';
+  try {
+    const parsed = JSON.parse(atob(stateParam));
+    lineUserId = parsed.lineUserId || '';
+  } catch {
+    return c.html(errorPage('Invalid state parameter'));
+  }
+
+  if (!lineUserId) {
+    return c.html(errorPage('LINE user ID not found in state'));
+  }
+
+  try {
+    const redirectUri = `${c.env.WORKER_URL}/api/liff/discord-callback`;
+
+    // Exchange code for access token
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: c.env.DISCORD_CLIENT_ID,
+        client_secret: c.env.DISCORD_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      console.error('Discord token exchange failed:', errText);
+      return c.html(errorPage('Discord token exchange failed'));
+    }
+
+    const tokenData = await tokenRes.json<{ access_token: string; token_type: string }>();
+
+    // Fetch Discord user info
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+
+    if (!userRes.ok) {
+      return c.html(errorPage('Failed to fetch Discord user info'));
+    }
+
+    const discordUser = await userRes.json<{ id: string; username: string }>();
+
+    const now = jstNow();
+
+    // Upsert into unified_profiles
+    await c.env.DB.prepare(
+      `INSERT INTO unified_profiles (line_uid, discord_id, discord_username, linked_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(line_uid) DO UPDATE SET
+         discord_id = excluded.discord_id,
+         discord_username = excluded.discord_username,
+         linked_at = excluded.linked_at,
+         updated_at = excluded.updated_at`
+    )
+      .bind(lineUserId, discordUser.id, discordUser.username, now, now)
+      .run();
+
+    return c.html(`<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord 連携完了</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; padding: 40px 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; max-width: 400px; width: 90%; }
+    .icon { width: 64px; height: 64px; border-radius: 50%; background: #5865F2; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
+    h2 { font-size: 20px; color: #5865F2; margin-bottom: 16px; }
+    .message { font-size: 14px; color: #666; line-height: 1.6; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✓</div>
+    <h2>Discord 連携完了！</h2>
+    <p class="message">Discord アカウント（${escapeHtml(discordUser.username)}）の連携が完了しました。<br>このページは閉じて大丈夫です。</p>
+  </div>
+</body>
+</html>`);
+  } catch (err) {
+    console.error('GET /api/liff/discord-callback error:', err);
+    return c.html(errorPage('Internal server error'));
+  }
+});
+
+// ─── PPAL Identity Hub — Teachable 連携 ────────────────────────
+
+/**
+ * POST /api/liff/link-teachable
+ * Body: { lineUserId: string, teachableEmail: string }
+ * Upserts teachable_email into unified_profiles.
+ */
+liffRoutes.post('/api/liff/link-teachable', async (c) => {
+  try {
+    const body = await c.req.json<{ lineUserId: string; teachableEmail: string }>();
+
+    if (!body.lineUserId || !body.teachableEmail) {
+      return c.json({ success: false, error: 'lineUserId and teachableEmail are required' }, 400);
+    }
+
+    const now = jstNow();
+
+    await c.env.DB.prepare(
+      `INSERT INTO unified_profiles (line_uid, teachable_email, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(line_uid) DO UPDATE SET
+         teachable_email = excluded.teachable_email,
+         updated_at = excluded.updated_at`
+    )
+      .bind(body.lineUserId, body.teachableEmail, now)
+      .run();
+
+    return c.json({ success: true, data: { linked: true } });
+  } catch (err) {
+    console.error('POST /api/liff/link-teachable error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 export { liffRoutes };
