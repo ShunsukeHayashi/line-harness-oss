@@ -155,7 +155,7 @@ async function processAutomations(
 }
 
 /** 条件マッチング */
-function matchConditions(
+export function matchConditions(
   conditions: Record<string, unknown>,
   payload: EventPayload,
 ): boolean {
