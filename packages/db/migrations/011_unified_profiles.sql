@@ -10,8 +10,17 @@ CREATE TABLE IF NOT EXISTS unified_profiles (
   teachable_email  TEXT,
   discord_id       TEXT,
   discord_username TEXT,
+  -- JSON array of Discord role IDs; NULL = not linked, [] = linked but no roles
   discord_roles    TEXT CHECK(discord_roles IS NULL OR json_valid(discord_roles)),
+  -- linked_at: NULL = no external account linked yet; populated on first link
   linked_at        TEXT,
+  -- created_at / updated_at: DEFAULT is UTC (datetime('now')).
+  -- App layer MUST always pass explicit JST values via jstNow() on INSERT/UPDATE.
+  -- The DEFAULT serves as a safety fallback only and should not be relied upon.
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Indexes for cross-system reverse lookups
+CREATE INDEX IF NOT EXISTS idx_unified_profiles_teachable_id ON unified_profiles(teachable_id);
+CREATE INDEX IF NOT EXISTS idx_unified_profiles_discord_id   ON unified_profiles(discord_id);
