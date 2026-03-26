@@ -428,7 +428,8 @@ webhook.post('/api/webhooks/teachable', async (c) => {
   if (typeof rawEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
     return c.json({ error: 'Invalid or missing email' }, 400);
   }
-  const email = rawEmail;
+  // Lowercase to avoid case-mismatch against stored teachable_email values.
+  const email = rawEmail.toLowerCase();
 
   const db = c.env.DB;
   const now = jstNow();
@@ -444,6 +445,7 @@ webhook.post('/api/webhooks/teachable', async (c) => {
               updated_at            = ?
         WHERE teachable_email = ?
           AND line_message_sent_at IS NULL
+          AND line_uid IS NOT NULL
         RETURNING line_uid`,
     )
     .bind(now, now, email)
@@ -463,9 +465,21 @@ webhook.post('/api/webhooks/teachable', async (c) => {
       buildMessage('text', 'ご購入ありがとうございます！\nコースへのアクセス権が付与されました。引き続きよろしくお願いします。'),
     ]);
   } catch (err) {
-    // DB is already updated — log the error but return 200 so Teachable does not
-    // retry (a retry would be a no-op due to the idempotency guard above).
     console.error('Teachable webhook: pushMessage failed for', lineUserId, err);
+    // Roll back the idempotency flag so the next Teachable retry can re-attempt
+    // delivery. Without this rollback the user would silently never receive their
+    // purchase confirmation on a transient push failure.
+    await db
+      .prepare(
+        `UPDATE unified_profiles
+            SET line_message_sent_at = NULL,
+                updated_at            = ?
+          WHERE teachable_email = ?`,
+      )
+      .bind(now, email)
+      .run();
+    // Return 502 so Teachable knows delivery failed and schedules a retry.
+    return c.json({ error: 'Delivery failed' }, 502);
   }
 
   return c.json({ status: 'ok' }, 200);
