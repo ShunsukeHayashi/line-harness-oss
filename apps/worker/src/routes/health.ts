@@ -11,6 +11,12 @@ import type { Env } from '../index.js';
 
 const health = new Hono<Env>();
 
+// ========== システムヘルスチェック ==========
+
+health.get('/health', (c) => {
+  return c.json({ status: 'ok', version: c.env.VERSION ?? 'unknown' })
+});
+
 // ========== アカウントヘルス ==========
 
 health.get('/api/accounts/:id/health', async (c) => {
