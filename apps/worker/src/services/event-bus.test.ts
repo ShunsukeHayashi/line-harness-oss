@@ -89,6 +89,7 @@ function makeAutomation(overrides: Partial<AutomationRow> & { conditions: string
     name: 'Test Automation',
     description: null,
     event_type: 'purchase',
+    line_account_id: null,
     is_active: 1,
     priority: 0,
     created_at: '2026-01-01T00:00:00Z',
