@@ -3,7 +3,10 @@
 import { useState, useRef } from 'react'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || ''
+// AIエンドポイント: ローカルAIサーバー（Claude Codeサブスク）優先、未設定ならWorker
+const AI_URL = process.env.NEXT_PUBLIC_AI_URL || 'http://localhost:4747'
+// API_KEYはlocalStorageから動的に読む（ビルド時に固定しない）
+const getApiKey = () => (typeof window !== 'undefined' ? localStorage.getItem('lh_api_key') ?? '' : '')
 
 export interface PromptTemplate {
   title: string
@@ -58,11 +61,12 @@ export default function PromptModal({ isOpen, onClose, prompts }: PromptModalPro
     setAiLoading((prev) => ({ ...prev, [index]: true }))
 
     try {
-      const res = await fetch(`${API_URL}/api/ai/analyze`, {
+      const apiKey = getApiKey()
+      const res = await fetch(`${AI_URL}/api/ai/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
         body: JSON.stringify({ prompt }),
         signal: controller.signal,
@@ -92,7 +96,14 @@ export default function PromptModal({ isOpen, onClose, prompts }: PromptModalPro
           if (data === '[DONE]') break
           try {
             const json = JSON.parse(data)
-            // Anthropic SSE: content_block_delta
+            // ローカルAIサーバー形式: { type: 'text', text: '...' }
+            if (json.type === 'text' && json.text) {
+              setAiAnswer((prev) => ({
+                ...prev,
+                [index]: (prev[index] ?? '') + json.text,
+              }))
+            }
+            // Anthropic SSE直接形式（Workerフォールバック用）: content_block_delta
             if (json.type === 'content_block_delta' && json.delta?.text) {
               setAiAnswer((prev) => ({
                 ...prev,
