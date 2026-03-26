@@ -18,6 +18,22 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # F5: Validate DESIGN_CONSTRAINTS.md changes
+      - name: Validate DESIGN_CONSTRAINTS.md changes
+        if: contains(github.event.pull_request.changed_files, 'DESIGN_CONSTRAINTS.md')
+        run: |
+          # 構文チェック: 各制約がリスト形式か
+          if ! grep -q "^##\|^-" DESIGN_CONSTRAINTS.md; then
+            echo "ERROR: DESIGN_CONSTRAINTS.md must use ## headers and - list items"
+            exit 1
+          fi
+          # 整合性チェック: trigger禁止と書いてあるのにコードにtriggerがあれば警告
+          if grep -qi "trigger.*禁止\|trigger.*ban\|no.*trigger" DESIGN_CONSTRAINTS.md; then
+            if grep -rq "CREATE TRIGGER\|AFTER UPDATE\|BEFORE UPDATE" --include="*.sql" .; then
+              echo "WARNING: DESIGN_CONSTRAINTS says no triggers, but SQL files contain trigger statements"
+            fi
+          fi
+
       - name: Checkout base branch for DESIGN_CONSTRAINTS
         uses: actions/checkout@v4
         with:
@@ -173,15 +189,15 @@ $REVIEWER_ASSIGNMENT"
 
 Provide your review:"
 
-          # Try token 1
-          REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>&1)
+          # Try token 1 (I3: capture stderr for token usage)
+          REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>/tmp/claude_stderr.txt)
           EXIT_CODE=$?
 
           # Fallback to token 2
           if [ $EXIT_CODE -ne 0 ]; then
             echo "Token 1 failed, trying token 2..."
             export CLAUDE_CODE_OAUTH_TOKEN="${{ steps.token.outputs.fallback_token_2 }}"
-            REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>&1)
+            REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>/tmp/claude_stderr.txt)
             EXIT_CODE=$?
           fi
 
@@ -189,7 +205,7 @@ Provide your review:"
           if [ $EXIT_CODE -ne 0 ]; then
             echo "Token 2 failed, trying token 3..."
             export CLAUDE_CODE_OAUTH_TOKEN="${{ steps.token.outputs.fallback_token_3 }}"
-            REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>&1)
+            REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>/tmp/claude_stderr.txt)
             EXIT_CODE=$?
           fi
 
@@ -211,6 +227,17 @@ Provide your review:"
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.token.outputs.token }}
           GH_TOKEN: ${{ github.token }}
 
+      # I3: Record token usage
+      - name: Record token usage
+        if: always()
+        run: |
+          if [ -f /tmp/claude_stderr.txt ]; then
+            TOKENS=$(grep -oE 'tokens?: [0-9]+' /tmp/claude_stderr.txt | head -1 || echo "unknown")
+            echo "Token usage: $TOKENS"
+            # Agent Skill Bus に記録（skill-runs.jsonl に追記）
+            # TODO: implement Agent Skill Bus integration when available
+          fi
+
       - name: Post CRITICAL review
         if: steps.review.outputs.has_critical == 'true'
         run: |
@@ -218,6 +245,27 @@ Provide your review:"
           gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-human"
         env:
           GH_TOKEN: ${{ github.token }}
+
+      # P4: Cascade Routing - escalate Copilot failures to Claude Code
+      - name: Cascade to Claude Code (self-hosted)
+        if: steps.review.outputs.has_critical == 'true' && github.event.pull_request.user.login == 'Copilot'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // needs-human の代わりに cascade-to-claude ラベルを付与
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: ['cascade-to-claude']
+            });
+            // PRコメントで通知
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: '🔄 **Cascade Routing**: Copilot implementation has CRITICAL issues. Escalating to Claude Code (self-hosted runner) for fix.'
+            });
 
       - name: Post WARNING-only review
         if: steps.review.outputs.has_critical == 'false'
