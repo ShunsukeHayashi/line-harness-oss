@@ -37,6 +37,8 @@ export async function getPlan(db: D1Database, friendId: string): Promise<Plan> {
 
   // 2. Stripe サブスクリプションテーブル（本番化後 T48 まで存在しない可能性がある）
   // テーブルが未作成の場合 D1 は null ではなく例外を投げるため try/catch で保護する。
+  // NOTE: subscriptions.user_id は LINE 友だち ID (friendId) と同一の識別子。
+  // T48 マイグレーション実装時に列名を統一すること。
   try {
     const sub = await db
       .prepare(

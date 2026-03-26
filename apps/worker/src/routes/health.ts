@@ -12,6 +12,8 @@ import type { Env } from '../index.js';
 const health = new Hono<Env>();
 
 // ========== システムヘルスチェック ==========
+// NOTE: This sub-router is mounted at the root with `app.route('/', health)` in index.ts,
+// so this handler resolves to GET /health (not /health/health or /api/health).
 
 health.get('/health', (c) => {
   // Public endpoint — no auth required (intended for uptime monitors).
