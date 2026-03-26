@@ -23,7 +23,9 @@ health.get('/health', (c) => {
   // Public endpoint — no auth required (intended for uptime monitors).
   // Cache-Control: no-store prevents CDN/browser from serving stale health data.
   c.header('Cache-Control', 'no-store');
-  return c.json({ status: 'ok', version: c.env.VERSION ?? 'unknown' });
+  // version is intentionally omitted from the public response to avoid
+  // fingerprinting. It is accessible via authenticated admin routes.
+  return c.json({ status: 'ok' });
 });
 
 // ========== アカウントヘルス ==========

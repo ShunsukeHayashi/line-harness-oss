@@ -25,7 +25,7 @@ export async function getPlan(db: D1Database, friendId: string): Promise<Plan> {
       `SELECT t.name FROM friend_tags ft
        JOIN tags t ON ft.tag_id = t.id
        WHERE ft.friend_id = ? AND t.name IN ('plan_business', 'plan_pro')
-       ORDER BY CASE t.name WHEN 'plan_business' THEN 1 WHEN 'plan_pro' THEN 2 END ASC
+       ORDER BY CASE t.name WHEN 'plan_business' THEN 1 WHEN 'plan_pro' THEN 2 ELSE 99 END ASC
        LIMIT 1`,
     )
     .bind(friendId)
@@ -51,10 +51,11 @@ export async function getPlan(db: D1Database, friendId: string): Promise<Plan> {
       return sub.plan as Plan;
     }
   } catch (err) {
-    // Expected error: subscriptions table does not exist yet (pre-T48).
-    // Log unexpected errors (schema mismatch etc.) so billing issues are observable.
+    // Expected: subscriptions table does not exist yet (pre-T48).
+    // Re-throw any other error — silently falling to 'free' would wrongly
+    // downgrade a paying user if D1 experiences a transient failure.
     if (!(err instanceof Error && err.message.includes('no such table'))) {
-      console.error('getPlan: subscription lookup failed:', err instanceof Error ? err.message : err);
+      throw err;
     }
   }
 
