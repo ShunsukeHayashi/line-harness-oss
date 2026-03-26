@@ -1,4 +1,4 @@
-name: Copilot Assign
+﻿name: Copilot Assign
 
 on:
   issues:
