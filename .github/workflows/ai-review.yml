@@ -159,14 +159,17 @@ Output: Start issues with CRITICAL: or WARNING: Be specific."
             esac
             if [ -z "$TOK" ]; then continue; fi
 
+            echo "$USER_PROMPT" > /tmp/claude_user_prompt.txt
+            echo "$SYSTEM_PROMPT" > /tmp/claude_system_prompt.txt
             REVIEW_BODY=$(ANTHROPIC_API_KEY="" \
               CLAUDE_CODE_OAUTH_TOKEN="$TOK" \
               CLAUDE_NO_ANALYTICS=1 \
-              echo "$USER_PROMPT" | claude \
+              claude \
                 --model claude-opus-4-6 \
                 --print \
                 --no-session-persistence \
-                --system-prompt "$SYSTEM_PROMPT" 2>/tmp/claude_stderr.txt)
+                --system-prompt "$(cat /tmp/claude_system_prompt.txt)" \
+                < /tmp/claude_user_prompt.txt 2>/tmp/claude_stderr.txt)
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 0 ] && [ -n "$REVIEW_BODY" ]; then
               echo "Token $TOK_NUM succeeded"
