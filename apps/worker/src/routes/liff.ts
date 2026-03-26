@@ -857,8 +857,9 @@ liffRoutes.post('/api/liff/discord/authorize', async (c) => {
     exp: Date.now() + 600_000, // 10-minute window
   });
 
-  const baseUrl = new URL(c.req.url).origin;
-  const callbackUrl = `${baseUrl}/api/liff/discord/callback`;
+  // Use WORKER_URL env var rather than deriving origin from the request Host
+  // header — Host can be forged in some proxy configurations.
+  const callbackUrl = `${c.env.WORKER_URL}/api/liff/discord/callback`;
 
   const authUrl = new URL('https://discord.com/oauth2/authorize');
   authUrl.searchParams.set('client_id', clientId);
@@ -903,8 +904,8 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
   }
 
   try {
-    const baseUrl = new URL(c.req.url).origin;
-    const callbackUrl = `${baseUrl}/api/liff/discord/callback`;
+    // Use WORKER_URL env var (same reason as authorize endpoint — avoid Host-header injection).
+    const callbackUrl = `${c.env.WORKER_URL}/api/liff/discord/callback`;
 
     // Exchange authorization code for access token.
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -953,6 +954,22 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
       discordUser.discriminator && discordUser.discriminator !== '0'
         ? `${discordUser.username}#${discordUser.discriminator}`
         : discordUser.username;
+
+    // Revoke the Discord access token immediately after the single-use identity
+    // lookup — it is not stored and only the `identify` scope was requested.
+    // waitUntil ensures the revocation fetch outlives the response.
+    c.executionCtx.waitUntil(
+      fetch('https://discord.com/api/oauth2/token/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          token: tokenData.access_token,
+          token_type_hint: 'access_token',
+          client_id: clientId,
+          client_secret: clientSecret,
+        }),
+      }).catch(() => undefined),
+    );
 
     // 1:1 identity constraint — one Discord account must map to exactly one LINE user.
     // Reject if this discord_id is already linked to a *different* line_uid.
