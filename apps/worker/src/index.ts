@@ -44,6 +44,19 @@ export type Env = {
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
+    VERSION?: string;
+    STRIPE_SECRET_KEY?: string;
+    STRIPE_WEBHOOK_SECRET?: string;
+    STRIPE_PRO_PRICE_ID?: string;
+    STRIPE_BUSINESS_PRICE_ID?: string;
+    GITHUB_TOKEN?: string;
+    GITHUB_REPO?: string;
+    ENABLE_STEALTH_MODE?: string;
+    TELEGRAM_BOT_TOKEN?: string;
+    TELEGRAM_CHAT_ID?: string;
+    DISCORD_CLIENT_ID: string;
+    DISCORD_CLIENT_SECRET: string;
+    LIFF_LINK_URL: string;
   };
 };
 
