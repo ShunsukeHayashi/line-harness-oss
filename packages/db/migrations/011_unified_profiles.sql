@@ -20,7 +20,11 @@ CREATE TABLE IF NOT EXISTS unified_profiles (
 CREATE INDEX IF NOT EXISTS idx_unified_teachable_email ON unified_profiles(teachable_email);
 
 -- Keep updated_at current on every UPDATE.
--- BEFORE UPDATE does not issue an UPDATE statement, so recursion cannot occur.
+-- BEFORE UPDATE is used instead of AFTER UPDATE to avoid infinite recursion in D1.
+-- SQLite disables recursive triggers (PRAGMA recursive_triggers=OFF) by default, so the
+-- inner UPDATE statement inside this trigger will NOT re-fire this trigger.
+-- Note: SQLite BEFORE triggers cannot modify NEW values directly (unlike PostgreSQL),
+-- so an explicit UPDATE statement is required.
 CREATE TRIGGER IF NOT EXISTS trg_unified_profiles_updated_at
   BEFORE UPDATE ON unified_profiles
 BEGIN
