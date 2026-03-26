@@ -624,7 +624,7 @@
       "phase": "P7",
       "priority": "high",
       "subject": "法務ページ実装 — プライバシーポリシー・特定商取引法",
-      "description": "法務3ページ(privacy/terms/tokutei)の内容充実 + 011_ai_consent.sql適用確認。現在はコードのみ(167B空ページ)。合同会社みやびの実情報を記載する。",
+      "description": "法務3ページ(privacy/terms/tokutei)の内容充実 + 011_ai_consent.sql適用確認。現在はコードのみ(各ページが167バイトの空実装)。合同会社みやびの実情報を記載する。",
       "steps": [
         "apps/web/src/app/legal/privacy/page.tsx 新規作成",
         "apps/web/src/app/legal/terms/page.tsx 新規作成",
