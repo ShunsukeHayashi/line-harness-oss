@@ -27,9 +27,12 @@ ALLOWED_ORIGINS    = "https://miyabi-line-admin.pages.dev"
 ENABLE_STEALTH_MODE = "false"
 WORKER_URL = "https://miyabi-line-crm.supernovasyun.workers.dev"
 VERSION            = "0.3.0"
-# PPAL Identity Hub — Discord OAuth (plain var; SECRET は wrangler secret put で設定)
+# PPAL Identity Hub — Phase 4 (Discord OAuth) placeholder vars.
+# Set real values via `wrangler secret put DISCORD_CLIENT_SECRET` and
+# update DISCORD_CLIENT_ID / LIFF_LINK_URL below before deploying Phase 4.
+# Empty string here is intentional: Env type declares these as optional (?:string),
+# so any code path reading them must guard against falsy/empty values.
 DISCORD_CLIENT_ID  = ""
-# LIFF 連携画面URL (例: "https://liff.line.me/xxxx-xxxxxxxx")
 LIFF_LINK_URL      = ""
 
 [[d1_databases]]

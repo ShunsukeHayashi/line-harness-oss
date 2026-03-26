@@ -14,7 +14,10 @@ const health = new Hono<Env>();
 // ========== システムヘルスチェック ==========
 
 health.get('/health', (c) => {
-  return c.json({ status: 'ok', version: c.env.VERSION ?? 'unknown' })
+  // Public endpoint — no auth required (intended for uptime monitors).
+  // Cache-Control: no-store prevents CDN/browser from serving stale health data.
+  c.header('Cache-Control', 'no-store');
+  return c.json({ status: 'ok', version: c.env.VERSION ?? 'unknown' });
 });
 
 // ========== アカウントヘルス ==========
