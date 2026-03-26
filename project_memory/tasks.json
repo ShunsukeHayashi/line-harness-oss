@@ -595,7 +595,7 @@
     {
       "id": "T37",
       "phase": "P7",
-      "priority": "high",
+      "priority": "medium",
       "subject": "Stripe本番設定 — wrangler secrets + テスト決済通過",
       "description": "T20でStripeコードは実装済みだが、wrangler secretsが未設定のため実際に課金できない。Stripeダッシュボードで商品・価格作成→ secrets設定→ テスト決済1件通過まで完了させる。※T38(法務ページ)が先行必須（Stripe本番申請にプライバシーポリシーURL必要）",
       "steps": [
@@ -616,7 +616,8 @@
       ],
       "estimate_hours": 3,
       "acceptance": "Stripeテストモードで Pro プラン購入→D1のsubscriptionsテーブルにレコード作成まで確認",
-      "status": "pending"
+      "status": "pending",
+      "note": "バイパスプラン適用中: β期間はTeachable決済で代替運用。Stripeは並行セットアップ(T42-T48)後に本番切替。T41のブロッカーではなくなった。"
     },
     {
       "id": "T38",
@@ -709,13 +710,39 @@
       "node": "MacBook Pro",
       "depends_on": [
         "T35",
-        "T37",
         "T38",
         "T39"
       ],
       "estimate_hours": 2,
       "acceptance": "10名以上がβ申込み完了、フィードバック5件以上収集",
-      "status": "pending"
+      "status": "pending",
+      "note": "バイパスプラン: Stripe本番化(T37)を待たずにTeachable決済で先行β開始。購入者へのplanタグ付与は手動CSV or LINE管理画面から実施。"
+    },
+    {
+      "id": "T49",
+      "phase": "P7",
+      "priority": "high",
+      "subject": "Teachable バイパス決済セットアップ — みやびラインβアクセス販売",
+      "description": "Stripe本番化(T42-T48)が完了するまでの暫定決済。Teachable上に「みやびライン Pro β」商品を作成し、購入者にLINEタグ(plan_pro)を手動付与してアクセス制御する。β期間10〜20名を想定した手動オペレーション。",
+      "steps": [
+        "Teachableダッシュボードで商品追加: 'みやびライン Pro β早期アクセス'",
+        "価格設定: ¥2,980/月（定期購読）or ¥29,800/年一括",
+        "購入完了メール: LINEアカウントURL + 友達登録手順を記載",
+        "友達登録後、管理画面から plan_pro タグを手動付与",
+        "apps/worker/src/middleware/auth.ts でplan_proタグ保持者にPro機能を解放する判定を追加",
+        "βユーザー向けオペレーション手順書（PPAL/β-ops.md）を作成",
+        "Stripe本番化後の移行フロー: 既存Teachable購入者にStripeサブスク移行案内"
+      ],
+      "file": "apps/worker/src/middleware/auth.ts",
+      "agent": "manual + kotowari-dev",
+      "node": "browser + terminal",
+      "depends_on": [
+        "T38"
+      ],
+      "estimate_hours": 3,
+      "acceptance": "TeachableでPro購入→LINE友達登録→plan_proタグ付与→Pro機能利用可能 まで手動フローが通る",
+      "status": "in_progress",
+      "note": "Stripe本番化(T48)完了後はこのバイパスを廃止し、全ユーザーをStripeサブスクに移行する"
     },
     {
       "id": "T42",
