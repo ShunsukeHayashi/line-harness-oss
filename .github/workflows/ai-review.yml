@@ -1,204 +1,234 @@
-name: AI Code Review
-
-# Copilot が作成した PR を Claude Opus で自動レビュー。
-# APPROVE されたものだけ auto-merge.yml がマージする。
-# Claude Code CLI（claude --print）+ OAuth トークンローテーションで動作。
+name: AI Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
-    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   ai-review:
-    name: Claude Opus Review
     runs-on: ubuntu-latest
-    if: |
-      github.event.pull_request.user.login == 'Copilot' ||
-      contains(github.event.pull_request.labels.*.name, 'ai-review')
-    permissions:
-      pull-requests: write
-      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Checkout base branch for DESIGN_CONSTRAINTS
+        uses: actions/checkout@v4
         with:
-          node-version: '22'
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: base-branch
 
-      - name: Install claude CLI
-        run: npm install -g @anthropic-ai/claude-code@latest
-
-      - name: Get PR diff
+      - name: Load DESIGN_CONSTRAINTS.md
+        id: constraints
         run: |
-          git fetch origin main
-          git diff origin/main...HEAD > /tmp/pr.diff
-          BYTES=$(wc -c < /tmp/pr.diff)
-          echo "Diff size: ${BYTES} bytes"
-
-          # 18000文字に制限（Opus のコンテキスト節約）
-          python3 -c "
-          with open('/tmp/pr.diff') as f:
-              diff = f.read()
-          MAX = 18000
-          truncated = len(diff) > MAX
-          if truncated:
-              diff = diff[:MAX] + '\n...[diff truncated due to length]'
-          with open('/tmp/pr.diff.limited', 'w') as f:
-              f.write(diff)
-          print('truncated=true' if truncated else 'truncated=false')
-          " >> $GITHUB_ENV
-
-      - name: Run AI Review
-        id: review
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN_1: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.ANTHROPIC_API_KEY_2 }}
-          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ secrets.ANTHROPIC_API_KEY_3 }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE:  ${{ github.event.pull_request.title }}
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-
-          SYSTEM_PROMPT="You are a principal engineer reviewing code for miyabi-line (line-harness-oss). Stack: Cloudflare Workers (Hono) + D1 (SQLite) + Next.js 15 + TypeScript strict + LIFF. Rules: NO Node.js APIs in Workers. D1 queries must use prepared statements. TypeScript no any. Validate all input. No SQL injection. Never expose internal errors."
-
-          USER_PROMPT="PR #${PR_NUMBER}: ${PR_TITLE}
-          Branch: ${PR_BRANCH}
-
-          Review the diff below. Output MUST follow this exact format:
-
-          ## Verdict
-          **[APPROVE]** <- write exactly this if production-ready
-          OR
-          **[REQUEST_CHANGES]** <- write exactly this if issues found
-
-          ## Summary
-          (2-3 sentences, plain language)
-
-          ## Findings
-          (use: OK good  WARNING warning  CRITICAL critical)
-
-          ## Required Changes
-          (numbered list if REQUEST_CHANGES, else: None)
-
-          Be strict. Only APPROVE if safe and correct for production."
-
-          # .claude/ ディレクトリの影響を避けるため /tmp から実行
-          cd /tmp
-
-          # 3トークンをローテーションして試みる
-          USED_KEY=0
-          for i in 1 2 3; do
-            case $i in
-              1) TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_1" ;;
-              2) TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_2" ;;
-              3) TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_3" ;;
-            esac
-
-            if [ -z "${TOKEN:-}" ]; then
-              echo "Token $i is empty, skipping."
-              continue
-            fi
-
-            echo "Trying token $i/3..."
-            set +e
-            REVIEW=$(cat /tmp/pr.diff.limited | \
-              ANTHROPIC_API_KEY="" \
-              CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" \
-              CLAUDE_NO_ANALYTICS=1 \
-              NO_UPDATE_NOTIFIER=1 \
-              claude \
-                --model claude-opus-4-6 \
-                --print "$USER_PROMPT" \
-                --system-prompt "$SYSTEM_PROMPT" \
-                --no-session-persistence \
-                2>/tmp/claude_stderr.txt)
-            EXIT_CODE=$?
-            set -e
-
-            if [ $EXIT_CODE -eq 0 ] && echo "$REVIEW" | grep -qE '\*\*\[(APPROVE|REQUEST_CHANGES)\]\*\*'; then
-              echo "Success with token $i"
-              USED_KEY=$i
-              break
-            else
-              echo "Token $i failed (exit: $EXIT_CODE):"
-              head -5 /tmp/claude_stderr.txt 2>/dev/null || true
-              # 429 (rate limit) の場合は少し待つ
-              if grep -q "429\|rate.limit\|overloaded" /tmp/claude_stderr.txt 2>/dev/null; then
-                echo "Rate limited, waiting 10s before next token..."
-                sleep 10
-              fi
-            fi
-          done
-
-          if [ "$USED_KEY" -eq 0 ]; then
-            echo "All tokens failed. Cannot post AI review."
-            exit 1
-          fi
-
-          echo "$REVIEW" > /tmp/review_output.txt
-          echo "used_key=$USED_KEY" >> $GITHUB_OUTPUT
-
-          if echo "$REVIEW" | grep -q '\*\*\[APPROVE\]\*\*'; then
-            echo "verdict=APPROVE" >> $GITHUB_OUTPUT
+          if [ -f "base-branch/DESIGN_CONSTRAINTS.md" ]; then
+            echo "constraints_exist=true" >> $GITHUB_OUTPUT
+            echo "CONSTRAINTS<<EOF" >> $GITHUB_ENV
+            cat base-branch/DESIGN_CONSTRAINTS.md >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           else
-            echo "verdict=REQUEST_CHANGES" >> $GITHUB_OUTPUT
+            echo "constraints_exist=false" >> $GITHUB_OUTPUT
+            echo "CONSTRAINTS=No design constraints defined for this repository." >> $GITHUB_ENV
           fi
 
-          echo "Verdict: $(grep -o '\*\*\[.*\]\*\*' /tmp/review_output.txt | head -1)"
+      # W1: Generate review prompt (if script exists)
+      - name: Generate dynamic review prompt
+        id: review_prompt
+        run: |
+          if [ -f "scripts/generate-review-prompt.sh" ]; then
+            REVIEW_PROMPT=$(bash scripts/generate-review-prompt.sh)
+            echo "REVIEW_PROMPT<<EOF" >> $GITHUB_ENV
+            echo "$REVIEW_PROMPT" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "has_prompt=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_prompt=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Post review to PR
-        # Run AI Review が成功した場合のみ実行
-        if: steps.review.outcome == 'success'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const review = fs.readFileSync('/tmp/review_output.txt', 'utf8');
-            const verdict = '${{ steps.review.outputs.verdict }}';
-            const usedKey = '${{ steps.review.outputs.used_key }}';
-            const truncated = process.env.truncated === 'true';
-            const pr = context.payload.pull_request;
+      - name: Detect doc-only PR
+        id: doc_check
+        run: |
+          FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files -q '.files[].path')
+          DOC_ONLY=true
+          
+          while IFS= read -r file; do
+            if [[ ! "$file" =~ \.(md|txt|rst|adoc)$ ]] && [[ ! "$file" =~ ^docs/ ]]; then
+              DOC_ONLY=false
+              break
+            fi
+          done <<< "$FILES"
+          
+          echo "doc_only=$DOC_ONLY" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-            const event = verdict === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
+      - name: Detect repository type
+        id: repo_type
+        run: |
+          if [ -f "package.json" ] || [ -f "tsconfig.json" ] || [ -f "go.mod" ] || [ -f "Cargo.toml" ]; then
+            echo "repo_type=code" >> $GITHUB_OUTPUT
+          else
+            echo "repo_type=knowledge" >> $GITHUB_OUTPUT
+          fi
 
-            const body = [
-              '## AI Code Review -- Claude Opus 4.6 (via Claude Code CLI)',
-              '',
-              review,
-              '',
-              '---',
-              `_Model: claude-opus-4-6 | Diff: ${truncated ? 'truncated' : 'full'} | PR: #${pr.number} | Token: #${usedKey}_`,
-            ].join('\n');
+      - name: Reject doc-only PR in code repo
+        if: steps.doc_check.outputs.doc_only == 'true' && steps.repo_type.outputs.repo_type == 'code'
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --request-changes --body "**CRITICAL: Documentation-only PR in code repository**
 
-            await github.rest.pulls.createReview({
-              owner:       context.repo.owner,
-              repo:        context.repo.repo,
-              pull_number: pr.number,
-              event,
-              body,
-            });
+This PR only modifies documentation files but is submitted to a code repository. Please include corresponding code changes or submit to a documentation repository instead."
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-human"
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-            console.log(`Posted ${event} review for PR #${pr.number} (token #${usedKey})`);
+      # C2: Token fallback (try 1→2→3 on failure)
+      - name: Select Claude Code token (fallback)
+        id: token
+        run: |
+          echo "token=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_1 }}" >> $GITHUB_OUTPUT
+          echo "fallback_token_2=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}" >> $GITHUB_OUTPUT
+          echo "fallback_token_3=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_3 }}" >> $GITHUB_OUTPUT
 
-            if (event === 'REQUEST_CHANGES') {
-              core.setFailed('AI review requested changes. Fix the issues before merging.');
-            }
+      # C1: Install Claude Code CLI
+      - name: Install Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code@latest
 
-      - name: Notify review failure
-        # Run AI Review が失敗した場合にPRにコメントを残す
-        if: steps.review.outcome == 'failure'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = context.payload.pull_request;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              issue_number: pr.number,
-              body: '⚠️ AI Code Review failed (all 3 OAuth tokens exhausted or rate-limited). Manual review required.',
-            });
+      # W1: Get PR diff and run reviewer assignment (if script exists)
+      - name: Get PR diff
+        id: diff
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
+          echo "diff_path=/tmp/pr.diff" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Run reviewer assignment agent
+        id: reviewer_assign
+        run: |
+          if [ -f "scripts/reviewer-assignment-agent.sh" ]; then
+            REVIEWER_ASSIGNMENT=$(bash scripts/reviewer-assignment-agent.sh /tmp/pr.diff)
+            echo "REVIEWER_ASSIGNMENT<<EOF" >> $GITHUB_ENV
+            echo "$REVIEWER_ASSIGNMENT" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "has_assignment=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_assignment=false" >> $GITHUB_OUTPUT
+          fi
+
+      # C1, C3: Run Claude via stdin, with proper CLI syntax
+      - name: Run AI Review with Claude Code
+        id: review
+        run: |
+          # Build system prompt
+          SYSTEM_PROMPT="You are a senior code reviewer. Review this PR against the following design constraints:
+
+$CONSTRAINTS"
+
+          # Add dynamic review prompt if available (W1)
+          if [ "${{ steps.review_prompt.outputs.has_prompt }}" == "true" ]; then
+            SYSTEM_PROMPT="$SYSTEM_PROMPT
+
+$REVIEW_PROMPT"
+          fi
+
+          # Build user prompt
+          USER_PROMPT="**PR Details:**
+- Title: ${{ github.event.pull_request.title }}
+- Author: ${{ github.event.pull_request.user.login }}
+
+**Diff:**
+\`\`\`diff
+$(cat /tmp/pr.diff)
+\`\`\`"
+
+          # Add reviewer assignment if available (W1)
+          if [ "${{ steps.reviewer_assign.outputs.has_assignment }}" == "true" ]; then
+            USER_PROMPT="$USER_PROMPT
+
+**Reviewer Assignment:**
+$REVIEWER_ASSIGNMENT"
+          fi
+
+          USER_PROMPT="$USER_PROMPT
+
+**Review Guidelines:**
+1. Check compliance with DESIGN_CONSTRAINTS.md
+2. Identify security issues, bugs, performance problems
+3. Rate each issue as CRITICAL or WARNING
+4. CRITICAL: security vulnerabilities, auth issues, data loss, breaking changes
+5. WARNING: code quality, style, minor bugs, improvement suggestions
+
+**Output Format:**
+- Start CRITICAL issues with \"CRITICAL:\"
+- Start warnings with \"WARNING:\"
+- Be specific and actionable
+
+Provide your review:"
+
+          # Try token 1
+          REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>&1)
+          EXIT_CODE=$?
+
+          # Fallback to token 2
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "Token 1 failed, trying token 2..."
+            export CLAUDE_CODE_OAUTH_TOKEN="${{ steps.token.outputs.fallback_token_2 }}"
+            REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>&1)
+            EXIT_CODE=$?
+          fi
+
+          # Fallback to token 3
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "Token 2 failed, trying token 3..."
+            export CLAUDE_CODE_OAUTH_TOKEN="${{ steps.token.outputs.fallback_token_3 }}"
+            REVIEW_BODY=$(echo "$USER_PROMPT" | claude --print --model claude-opus-4-6 --system-prompt "$SYSTEM_PROMPT" --no-session-persistence 2>&1)
+            EXIT_CODE=$?
+          fi
+
+          # All tokens failed
+          if [ $EXIT_CODE -ne 0 ]; then
+            REVIEW_BODY="AI review failed: all tokens exhausted or invalid"
+          fi
+          
+          echo "REVIEW_BODY<<EOF" >> $GITHUB_ENV
+          echo "$REVIEW_BODY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          if echo "$REVIEW_BODY" | grep -q "CRITICAL:"; then
+            echo "has_critical=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_critical=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Post CRITICAL review
+        if: steps.review.outputs.has_critical == 'true'
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --request-changes --body "$REVIEW_BODY"
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-human"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Post WARNING-only review
+        if: steps.review.outputs.has_critical == 'false'
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --approve --body "$REVIEW_BODY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Comment on doc-only PR in knowledge repo
+        if: steps.doc_check.outputs.doc_only == 'true' && steps.repo_type.outputs.repo_type == 'knowledge'
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "✅ Documentation-only PR in knowledge repository. Auto-approved."
+        env:
+          GH_TOKEN: ${{ github.token }}
