@@ -50,8 +50,12 @@ export async function getPlan(db: D1Database, friendId: string): Promise<Plan> {
     if (sub && (sub.plan === 'pro' || sub.plan === 'business')) {
       return sub.plan as Plan;
     }
-  } catch {
-    // subscriptions テーブルが未作成（T48 本番化前）— 無視して free にフォールスルー。
+  } catch (err) {
+    // Expected error: subscriptions table does not exist yet (pre-T48).
+    // Log unexpected errors (schema mismatch etc.) so billing issues are observable.
+    if (!(err instanceof Error && err.message.includes('no such table'))) {
+      console.error('getPlan: subscription lookup failed:', err instanceof Error ? err.message : err);
+    }
   }
 
   return 'free';
