@@ -363,14 +363,22 @@ async function handleEvent(
 
 // ======== Teachable Webhook ========
 
-// Timing-safe string comparison — prevents token leak via response timing.
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
+// HMAC-SHA256 both tokens before comparing so crypto.subtle.timingSafeEqual
+// always operates on equal-length 32-byte digests, preventing length leaks.
+async function verifyBearerToken(given: string, expected: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode('miyabi-line-webhook-hmac-key'),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const [a, b] = await Promise.all([
+    crypto.subtle.sign('HMAC', key, enc.encode(given)),
+    crypto.subtle.sign('HMAC', key, enc.encode(expected)),
+  ]);
+  return crypto.subtle.timingSafeEqual(a, b);
 }
 
 webhook.post('/api/webhooks/teachable', async (c) => {
@@ -384,7 +392,7 @@ webhook.post('/api/webhooks/teachable', async (c) => {
   }
   const authHeader = c.req.header('Authorization') ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  if (!timingSafeEqual(token, webhookSecret)) {
+  if (!(await verifyBearerToken(token, webhookSecret))) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -396,61 +404,57 @@ webhook.post('/api/webhooks/teachable', async (c) => {
     return c.json({ error: 'Invalid JSON' }, 400);
   }
 
-  const payload = body as {
-    event?: string;
-    data?: { object?: { email?: string } };
-  };
+  // 3. Runtime type guards — avoid unsafe `as` assertions on untrusted input
+  if (typeof body !== 'object' || body === null) {
+    return c.json({ error: 'Invalid payload' }, 400);
+  }
+  const payload = body as Record<string, unknown>;
 
   // Ignore non-sale.created events silently
-  if (payload.event !== 'sale.created') {
+  if (payload['event'] !== 'sale.created') {
     return c.json({ status: 'ignored' }, 200);
   }
 
-  // 3. Email format validation
-  const email = payload.data?.object?.email ?? '';
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  // 4. Email format validation — walk the object graph with type checks
+  const dataObj = payload['data'];
+  const saleObj =
+    typeof dataObj === 'object' && dataObj !== null
+      ? (dataObj as Record<string, unknown>)['object']
+      : undefined;
+  const rawEmail =
+    typeof saleObj === 'object' && saleObj !== null
+      ? (saleObj as Record<string, unknown>)['email']
+      : undefined;
+  if (typeof rawEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
     return c.json({ error: 'Invalid or missing email' }, 400);
   }
+  const email = rawEmail;
 
   const db = c.env.DB;
-
-  // Look up unified_profiles by teachable_email
-  const profile = await db
-    .prepare(
-      `SELECT line_uid, line_message_sent_at
-         FROM unified_profiles
-        WHERE teachable_email = ?
-        LIMIT 1`,
-    )
-    .bind(email)
-    .first<{ line_uid: string; line_message_sent_at: string | null }>();
-
-  if (!profile) {
-    // Teachable user has not linked their LINE account yet.
-    return c.json({ status: 'no_linked_user' }, 200);
-  }
-
-  // 4. Idempotency: skip if LINE message was already sent for this purchase
-  if (profile.line_message_sent_at) {
-    return c.json({ status: 'already_sent' }, 200);
-  }
-
-  const lineUserId = profile.line_uid;
   const now = jstNow();
 
-  // 5. Update DB FIRST before sending.
-  //    Recording the send intent before the actual push prevents duplicates if
-  //    the worker crashes between a successful pushMessage and the DB write.
-  //    A failed pushMessage after this UPDATE is the safer failure mode.
-  await db
+  // 5. Atomic idempotency — single conditional UPDATE eliminates the
+  //    TOCTOU race that existed in a separate SELECT + UPDATE pair.
+  //    If line_message_sent_at is already set, or no row matches the email,
+  //    RETURNING returns no rows → claimed is null → safe 200 early-exit.
+  const claimed = await db
     .prepare(
       `UPDATE unified_profiles
           SET line_message_sent_at = ?,
               updated_at            = ?
-        WHERE line_uid = ?`,
+        WHERE teachable_email = ?
+          AND line_message_sent_at IS NULL
+        RETURNING line_uid`,
     )
-    .bind(now, now, lineUserId)
-    .run();
+    .bind(now, now, email)
+    .first<{ line_uid: string }>();
+
+  if (!claimed) {
+    // Either no linked LINE user or message already dispatched — safe to 200.
+    return c.json({ status: 'already_sent_or_no_user' }, 200);
+  }
+
+  const lineUserId = claimed.line_uid;
 
   // 6. Send LINE push message after the idempotency record is committed
   try {
