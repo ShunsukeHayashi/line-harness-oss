@@ -70,7 +70,7 @@ jobs:
                 agentAssignment: {
                   targetRepositoryId: repoId,   // 必須: これがないと Copilot が起動しない
                   baseRef: 'main',
-                  customInstructions: '',
+                  customInstructions: 'IMPORTANT: Every PR MUST contain at least one executable code file (.js .ts .py .sh etc). Do NOT create PRs with only .md documentation files. Implement exactly what the Issue acceptance criteria require. Write tests for new functions. Follow TypeScript strict mode. Use prepared statements for all D1 queries.',
                 },
               },
             });
