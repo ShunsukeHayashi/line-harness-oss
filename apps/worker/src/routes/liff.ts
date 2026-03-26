@@ -13,6 +13,7 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { rateLimitMiddleware } from '../middleware/rate-limit.js';
 
 const liffRoutes = new Hono<Env>();
 
@@ -852,21 +853,155 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ─── PPAL Identity Hub — helpers ────────────────────────────────
+
+/** LINE user ID format: U followed by 32 hex chars */
+const LINE_UID_RE = /^U[0-9a-f]{32}$/;
+
+/** Basic email format check */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Rate-limit window for PPAL OAuth endpoints: 10 minutes */
+const OAUTH_RATE_LIMIT_WINDOW_MS = 600_000;
+
+/**
+ * Collect all known LINE Login channel IDs (default env + DB accounts).
+ */
+async function getAllLoginChannelIds(db: D1Database, defaultChannelId: string): Promise<string[]> {
+  const ids = [defaultChannelId];
+  try {
+    const dbAccounts = await getLineAccounts(db);
+    for (const acct of dbAccounts) {
+      if (acct.login_channel_id && !ids.includes(acct.login_channel_id)) {
+        ids.push(acct.login_channel_id);
+      }
+    }
+  } catch { /* ignore DB errors for account list */ }
+  return ids;
+}
+
+/**
+ * Verify a LIFF ID token with LINE's OAuth endpoint.
+ * Returns the verified `sub` (LINE user ID) or null on failure.
+ */
+async function verifyLiffIdToken(
+  idToken: string,
+  loginChannelIds: string[]
+): Promise<string | null> {
+  for (const channelId of loginChannelIds) {
+    const res = await fetch('https://api.line.me/oauth2/v2.1/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ id_token: idToken, client_id: channelId }),
+    });
+    if (res.ok) {
+      const data = await res.json<{ sub?: string }>();
+      if (data.sub && data.sub.length > 0) return data.sub;
+    }
+  }
+  return null;
+}
+
+/**
+ * Sign a state payload with HMAC-SHA256.
+ * Returns base64url-encoded signature.
+ */
+async function hmacSign(payload: string, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(payload));
+  return btoa(Array.from(new Uint8Array(sigBuf), (b) => String.fromCharCode(b)).join(''))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+/**
+ * Verify an HMAC-SHA256 signature in constant time.
+ */
+async function hmacVerify(payload: string, signature: string, secret: string): Promise<boolean> {
+  const expected = await hmacSign(payload, secret);
+  if (expected.length !== signature.length) return false;
+  const enc = new TextEncoder();
+  const a = enc.encode(expected);
+  const b = enc.encode(signature);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/** State payload TTL: 10 minutes */
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Create a signed OAuth state token.
+ * Format: <base64-payload>.<hmac-signature>
+ */
+async function createOAuthState(lineUserId: string, secret: string): Promise<string> {
+  const payload = btoa(JSON.stringify({ lineUserId, exp: Date.now() + OAUTH_STATE_TTL_MS }));
+  const sig = await hmacSign(payload, secret);
+  return `${payload}.${sig}`;
+}
+
+/**
+ * Parse and verify a signed OAuth state token.
+ * Returns the lineUserId if valid, or null if tampered/expired.
+ */
+async function parseOAuthState(
+  state: string,
+  secret: string
+): Promise<string | null> {
+  const dotIdx = state.lastIndexOf('.');
+  if (dotIdx === -1) return null;
+  const payload = state.slice(0, dotIdx);
+  const sig = state.slice(dotIdx + 1);
+
+  const valid = await hmacVerify(payload, sig, secret);
+  if (!valid) return null;
+
+  try {
+    const parsed = JSON.parse(atob(payload)) as { lineUserId?: string; exp?: number };
+    if (!parsed.exp || Date.now() > parsed.exp) return null;
+    return parsed.lineUserId || null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── PPAL Identity Hub — Discord OAuth ──────────────────────────
+
+// Rate-limit: 10 requests per 10 minutes per IP for Discord OAuth initiation
+liffRoutes.use('/api/liff/link-discord', rateLimitMiddleware({ windowMs: OAUTH_RATE_LIMIT_WINDOW_MS, maxRequests: 10, keyPrefix: 'link-discord' }));
+// Rate-limit: 20 requests per 10 minutes per IP for Discord callback
+liffRoutes.use('/api/liff/discord-callback', rateLimitMiddleware({ windowMs: OAUTH_RATE_LIMIT_WINDOW_MS, maxRequests: 20, keyPrefix: 'discord-cb' }));
 
 /**
  * GET /api/liff/link-discord
- * Redirects to Discord Authorization URL.
- * Query param: ?lineUserId=<LINE user ID>
+ * Verifies the LIFF ID token, then redirects to Discord Authorization URL.
+ * Query param: ?idToken=<LIFF ID token>
  */
-liffRoutes.get('/api/liff/link-discord', (c) => {
-  const lineUserId = c.req.query('lineUserId');
+liffRoutes.get('/api/liff/link-discord', async (c) => {
+  const idToken = c.req.query('idToken');
+  if (!idToken) {
+    return c.json({ success: false, error: 'idToken is required' }, 400);
+  }
+
+  const loginChannelIds = await getAllLoginChannelIds(c.env.DB, c.env.LINE_LOGIN_CHANNEL_ID);
+  const lineUserId = await verifyLiffIdToken(idToken, loginChannelIds);
   if (!lineUserId) {
-    return c.json({ success: false, error: 'lineUserId is required' }, 400);
+    return c.json({ success: false, error: 'Invalid ID token' }, 401);
+  }
+
+  if (!LINE_UID_RE.test(lineUserId)) {
+    return c.json({ success: false, error: 'Invalid LINE user ID format' }, 400);
   }
 
   const redirectUri = `${c.env.WORKER_URL}/api/liff/discord-callback`;
-  const state = btoa(JSON.stringify({ lineUserId }));
+  const state = await createOAuthState(lineUserId, c.env.DISCORD_CLIENT_SECRET);
 
   const authUrl = new URL('https://discord.com/api/oauth2/authorize');
   authUrl.searchParams.set('client_id', c.env.DISCORD_CLIENT_ID);
@@ -880,7 +1015,7 @@ liffRoutes.get('/api/liff/link-discord', (c) => {
 
 /**
  * GET /api/liff/discord-callback
- * Discord OAuth callback: exchanges code, fetches user, upserts unified_profiles.
+ * Discord OAuth callback: verifies signed state, exchanges code, upserts unified_profiles.
  */
 liffRoutes.get('/api/liff/discord-callback', async (c) => {
   const code = c.req.query('code');
@@ -891,16 +1026,14 @@ liffRoutes.get('/api/liff/discord-callback', async (c) => {
     return c.html(errorPage(error || 'Discord authorization failed'));
   }
 
-  let lineUserId = '';
-  try {
-    const parsed = JSON.parse(atob(stateParam));
-    lineUserId = parsed.lineUserId || '';
-  } catch {
-    return c.html(errorPage('Invalid state parameter'));
+  // Verify HMAC-signed state (CSRF protection)
+  const lineUserId = await parseOAuthState(stateParam, c.env.DISCORD_CLIENT_SECRET);
+  if (!lineUserId) {
+    return c.html(errorPage('Invalid or expired state parameter'));
   }
 
-  if (!lineUserId) {
-    return c.html(errorPage('LINE user ID not found in state'));
+  if (!LINE_UID_RE.test(lineUserId)) {
+    return c.html(errorPage('Invalid LINE user ID in state'));
   }
 
   try {
@@ -984,17 +1117,34 @@ liffRoutes.get('/api/liff/discord-callback', async (c) => {
 
 // ─── PPAL Identity Hub — Teachable 連携 ────────────────────────
 
+// Rate-limit: 20 requests per 10 minutes per IP
+liffRoutes.use('/api/liff/link-teachable', rateLimitMiddleware({ windowMs: OAUTH_RATE_LIMIT_WINDOW_MS, maxRequests: 20, keyPrefix: 'link-teachable' }));
+
 /**
  * POST /api/liff/link-teachable
- * Body: { lineUserId: string, teachableEmail: string }
- * Upserts teachable_email into unified_profiles.
+ * Body: { idToken: string, teachableEmail: string }
+ * Verifies LIFF ID token, then upserts teachable_email into unified_profiles.
  */
 liffRoutes.post('/api/liff/link-teachable', async (c) => {
   try {
-    const body = await c.req.json<{ lineUserId: string; teachableEmail: string }>();
+    const body = await c.req.json<{ idToken: string; teachableEmail: string }>();
 
-    if (!body.lineUserId || !body.teachableEmail) {
-      return c.json({ success: false, error: 'lineUserId and teachableEmail are required' }, 400);
+    if (!body.idToken || !body.teachableEmail) {
+      return c.json({ success: false, error: 'idToken and teachableEmail are required' }, 400);
+    }
+
+    if (!EMAIL_RE.test(body.teachableEmail)) {
+      return c.json({ success: false, error: 'Invalid email format' }, 400);
+    }
+
+    const loginChannelIds = await getAllLoginChannelIds(c.env.DB, c.env.LINE_LOGIN_CHANNEL_ID);
+    const lineUserId = await verifyLiffIdToken(body.idToken, loginChannelIds);
+    if (!lineUserId) {
+      return c.json({ success: false, error: 'Invalid ID token' }, 401);
+    }
+
+    if (!LINE_UID_RE.test(lineUserId)) {
+      return c.json({ success: false, error: 'Invalid LINE user ID format' }, 400);
     }
 
     const now = jstNow();
@@ -1006,7 +1156,7 @@ liffRoutes.post('/api/liff/link-teachable', async (c) => {
          teachable_email = excluded.teachable_email,
          updated_at = excluded.updated_at`
     )
-      .bind(body.lineUserId, body.teachableEmail, now)
+      .bind(lineUserId, body.teachableEmail, now)
       .run();
 
     return c.json({ success: true, data: { linked: true } });
