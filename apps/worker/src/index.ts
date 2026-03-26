@@ -32,6 +32,7 @@ import { automations } from './routes/automations.js';
 import { richMenus } from './routes/rich-menus.js';
 import { trackedLinks } from './routes/tracked-links.js';
 import { forms } from './routes/forms.js';
+import { teachable } from './routes/teachable.js';
 
 export type Env = {
   Bindings: {
@@ -40,6 +41,7 @@ export type Env = {
     LINE_CHANNEL_ACCESS_TOKEN: string;
     API_KEY: string;
     LIFF_URL: string;
+    LIFF_LINK_URL: string;
     LINE_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
@@ -82,6 +84,7 @@ app.route('/', automations);
 app.route('/', richMenus);
 app.route('/', trackedLinks);
 app.route('/', forms);
+app.route('/', teachable);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
