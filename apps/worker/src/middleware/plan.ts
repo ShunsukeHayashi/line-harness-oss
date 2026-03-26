@@ -35,16 +35,21 @@ export async function getPlan(db: D1Database, friendId: string): Promise<Plan> {
     return PLAN_TAGS[tagRow.name];
   }
 
-  // 2. Stripe サブスクリプションテーブル（本番化後）
-  const sub = await db
-    .prepare(
-      `SELECT plan FROM subscriptions WHERE user_id = ? AND status = 'active' LIMIT 1`,
-    )
-    .bind(friendId)
-    .first<{ plan: string }>();
+  // 2. Stripe サブスクリプションテーブル（本番化後 T48 まで存在しない可能性がある）
+  // テーブルが未作成の場合 D1 は null ではなく例外を投げるため try/catch で保護する。
+  try {
+    const sub = await db
+      .prepare(
+        `SELECT plan FROM subscriptions WHERE user_id = ? AND status = 'active' LIMIT 1`,
+      )
+      .bind(friendId)
+      .first<{ plan: string }>();
 
-  if (sub && (sub.plan === 'pro' || sub.plan === 'business')) {
-    return sub.plan as Plan;
+    if (sub && (sub.plan === 'pro' || sub.plan === 'business')) {
+      return sub.plan as Plan;
+    }
+  } catch {
+    // subscriptions テーブルが未作成（T48 本番化前）— 無視して free にフォールスルー。
   }
 
   return 'free';
