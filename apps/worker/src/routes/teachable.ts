@@ -1,14 +1,29 @@
 import { Hono } from 'hono';
 import { LineClient } from '@line-crm/line-sdk';
-import { buildMessage } from '../services/step-delivery.js';
+import type { Message } from '@line-crm/line-sdk';
 import type { Env } from '../index.js';
 
 const teachable = new Hono<Env>();
 
+// Basic email format validation (without regex literal to satisfy strict linters)
+function isValidEmail(value: string): boolean {
+  const parts = value.split('@');
+  return parts.length === 2 && parts[0].length > 0 && parts[1].includes('.');
+}
+
 // Teachable sale.created Webhook handler
 // POST /api/webhooks/teachable
+// Authentication: TEACHABLE_WEBHOOK_SECRET must be provided as "secret" query param
+// (configure in Teachable dashboard: Webhook URL = https://<worker>/api/webhooks/teachable?secret=<TEACHABLE_WEBHOOK_SECRET>)
 teachable.post('/api/webhooks/teachable', async (c) => {
   try {
+    // ── Authentication ──────────────────────────────────────────────────────
+    const expectedSecret = c.env.TEACHABLE_WEBHOOK_SECRET;
+    const providedSecret = c.req.query('secret') ?? c.req.header('X-Teachable-Secret');
+    if (!expectedSecret || !providedSecret || providedSecret !== expectedSecret) {
+      return c.json({ success: false, error: 'Unauthorized' }, 401);
+    }
+
     const body = await c.req.json<{
       event?: string;
       object?: {
@@ -28,6 +43,11 @@ teachable.post('/api/webhooks/teachable', async (c) => {
 
     if (!email) {
       return c.json({ success: false, error: 'email is required in sale.created payload' }, 400);
+    }
+
+    // ── Email validation ──────────────────────────────────────────────────
+    if (!isValidEmail(email)) {
+      return c.json({ success: false, error: 'Invalid email format' }, 400);
     }
 
     const db = c.env.DB;
@@ -63,6 +83,25 @@ teachable.post('/api/webhooks/teachable', async (c) => {
       });
     }
 
+    // ── Idempotency: mark DB record BEFORE sending the LINE message ──────
+    // Uses "line_message_sent_at IS NULL" as an optimistic lock to prevent
+    // duplicate sends on concurrent or retry requests.
+    const updated = await db
+      .prepare(
+        `UPDATE unified_profiles
+         SET line_user_id = ?,
+             line_message_sent_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'),
+             updated_at           = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
+         WHERE teachable_email = ? AND line_message_sent_at IS NULL`,
+      )
+      .bind(friend.line_user_id, email)
+      .run();
+
+    if (updated.meta.changes === 0) {
+      // Another request already sent this message
+      return c.json({ success: true, data: { registered: true, lineSent: false, reason: 'already sent' } });
+    }
+
     // Resolve LINE access token — prefer account-specific token
     let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
     if (friend.line_account_id) {
@@ -77,15 +116,18 @@ teachable.post('/api/webhooks/teachable', async (c) => {
     const liffUrl = c.env.LIFF_LINK_URL || c.env.LIFF_URL;
     const name = friend.display_name || '';
 
-    // Build LIFF linkage guidance message
-    const textMessage = buildMessage(
-      'text',
-      `🎉 ${name ? `${name}さん、` : ''}ご購入ありがとうございます！\n\nアカウント連携で受講・Discordコミュニティへのアクセスが開始されます。\n下のボタンから30秒で完了できます。`,
-    );
+    // Build LIFF linkage guidance messages
+    // Text message
+    const textMessage: Message = {
+      type: 'text',
+      text: `🎉 ${name ? `${name}さん、` : ''}ご購入ありがとうございます！\n\nアカウント連携で受講・Discordコミュニティへのアクセスが開始されます。\n下のボタンから30秒で完了できます。`,
+    };
 
-    const flexMessage = buildMessage(
-      'flex',
-      JSON.stringify({
+    // Flex message with "今すぐ連携する" button
+    const flexMessage: Message = {
+      type: 'flex',
+      altText: 'アカウント連携のご案内',
+      contents: {
         type: 'bubble',
         size: 'mega',
         body: {
@@ -127,19 +169,10 @@ teachable.post('/api/webhooks/teachable', async (c) => {
             },
           ],
         },
-      }),
-    );
+      },
+    };
 
     await lineClient.pushMessage(friend.line_user_id, [textMessage, flexMessage]);
-
-    // Update unified_profiles with line_user_id now that we know the link
-    await db
-      .prepare(
-        `UPDATE unified_profiles SET line_user_id = ?, line_message_sent_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'), updated_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
-         WHERE teachable_email = ?`,
-      )
-      .bind(friend.line_user_id, email)
-      .run();
 
     return c.json({ success: true, data: { registered: true, lineSent: true } });
   } catch (err) {
@@ -149,3 +182,4 @@ teachable.post('/api/webhooks/teachable', async (c) => {
 });
 
 export { teachable };
+

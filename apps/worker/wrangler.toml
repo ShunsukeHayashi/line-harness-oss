@@ -11,6 +11,7 @@ workers_dev = true
 #   wrangler secret put LINE_CHANNEL_SECRET
 #   wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
 #   wrangler secret put LINE_LOGIN_CHANNEL_SECRET
+#   wrangler secret put TEACHABLE_WEBHOOK_SECRET  — Teachable Webhook の認証シークレット
 #
 # Plain vars (set here or via Dashboard):
 #   ALLOWED_ORIGINS — 管理画面のオリジン。例: "https://admin.yoursite.com"

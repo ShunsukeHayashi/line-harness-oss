@@ -42,6 +42,7 @@ export type Env = {
     API_KEY: string;
     LIFF_URL: string;
     LIFF_LINK_URL: string;
+    TEACHABLE_WEBHOOK_SECRET: string;
     LINE_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
