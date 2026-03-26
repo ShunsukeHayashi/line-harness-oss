@@ -7,12 +7,15 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   ai-review:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout PR branch
+      - name: Checkout PR
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -23,63 +26,86 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
           path: base-branch
 
-      - name: Install Claude Code
+      - name: Load DESIGN_CONSTRAINTS
+        id: constraints
+        run: |
+          if [ -f "base-branch/DESIGN_CONSTRAINTS.md" ]; then
+            {
+              echo "CONSTRAINTS<<CONSTRAINTS_EOF"
+              cat base-branch/DESIGN_CONSTRAINTS.md
+              echo "CONSTRAINTS_EOF"
+            } >> "$GITHUB_ENV"
+          else
+            echo "CONSTRAINTS=No design constraints defined." >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code@latest
 
       - name: Get PR diff
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
 
-      - name: Prepare Input for Claude
-        run: |
-          # Include constraints at the top of the diff input
-          if [ -f "base-branch/DESIGN_CONSTRAINTS.md" ]; then
-            echo "Review the following PR diff against these design constraints. Output CRITICAL: if there are severe issues, otherwise just give warnings and approve." > /tmp/input.txt
-            echo "--- DESIGN CONSTRAINTS ---" >> /tmp/input.txt
-            cat base-branch/DESIGN_CONSTRAINTS.md >> /tmp/input.txt
-            echo "--- END DESIGN CONSTRAINTS ---" >> /tmp/input.txt
-            echo "" >> /tmp/input.txt
-            echo "PR Diff:" >> /tmp/input.txt
-          else
-            echo "Review the following PR diff. Output CRITICAL: if there are severe issues." > /tmp/input.txt
-          fi
-          cat /tmp/pr.diff >> /tmp/input.txt
-          
-          # Replace original diff with combined input to satisfy requirements seamlessly
-          mv /tmp/input.txt /tmp/pr.diff
-
-      - name: Run Claude Code Review
+      - name: Run AI Review
         id: review
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_1 }}
         run: |
-          # The exact requested command:
-          REVIEW_OUTPUT=$(cat /tmp/pr.diff | claude --print --model claude-opus-4-6 --no-session-persistence 2>&1 || echo "Claude review completed with non-zero exit code")
-          
-          # Use secure delimiter for multiline environment variables
-          EOF=$(openssl rand -hex 16)
-          echo "REVIEW_BODY<<$EOF" >> $GITHUB_ENV
-          echo "$REVIEW_OUTPUT" >> $GITHUB_ENV
-          echo "$EOF" >> $GITHUB_ENV
-          
-          if echo "$REVIEW_OUTPUT" | grep -q "CRITICAL:"; then
-            echo "has_critical=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_critical=false" >> $GITHUB_OUTPUT
+          cat > /tmp/review_prompt.txt << 'PROMPT_EOF'
+          You are a senior code reviewer. Review this PR diff against design constraints.
+
+          Review Guidelines:
+          - Start CRITICAL issues with "CRITICAL:"
+          - Start warnings with "WARNING:"
+          - CRITICAL: security vulnerabilities, auth issues, data loss, breaking changes
+          - WARNING: code quality, style, minor bugs
+          PROMPT_EOF
+
+          echo "Design Constraints: ${CONSTRAINTS}" >> /tmp/review_prompt.txt
+          echo "" >> /tmp/review_prompt.txt
+          echo "PR Title: ${{ github.event.pull_request.title }}" >> /tmp/review_prompt.txt
+          echo "PR Author: ${{ github.event.pull_request.user.login }}" >> /tmp/review_prompt.txt
+          echo "" >> /tmp/review_prompt.txt
+          echo "--- DIFF ---" >> /tmp/review_prompt.txt
+          cat /tmp/pr.diff >> /tmp/review_prompt.txt
+
+          REVIEW=""
+          for TOKEN_VAR in CLAUDE_CODE_OAUTH_TOKEN_1 CLAUDE_CODE_OAUTH_TOKEN_2 CLAUDE_CODE_OAUTH_TOKEN_3; do
+            TOK="${!TOKEN_VAR}"
+            if [ -z "$TOK" ]; then
+              continue
+            fi
+            REVIEW=$(ANTHROPIC_API_KEY="" CLAUDE_CODE_OAUTH_TOKEN="$TOK" CLAUDE_NO_ANALYTICS=1 \
+              claude --print --model claude-opus-4-6 --no-session-persistence \
+              < /tmp/review_prompt.txt 2>/tmp/claude_err.txt) && break
+            echo "Token $TOKEN_VAR failed, trying next..."
+          done
+
+          if [ -z "$REVIEW" ]; then
+            REVIEW="AI review unavailable: all tokens failed or not configured."
           fi
 
-      - name: Post Review (CRITICAL)
-        if: steps.review.outputs.has_critical == 'true'
+          {
+            echo "REVIEW_BODY<<REVIEW_EOF"
+            echo "$REVIEW"
+            echo "REVIEW_EOF"
+          } >> "$GITHUB_ENV"
+
+          if echo "$REVIEW" | grep -q "^CRITICAL:"; then
+            echo "has_critical=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_critical=false" >> "$GITHUB_OUTPUT"
+          fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_1 }}
+          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
+          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_3 }}
+
+      - name: Post review (request changes - CRITICAL found)
+        if: steps.review.outputs.has_critical == 'true'
         run: |
           gh pr review ${{ github.event.pull_request.number }} --request-changes --body "$REVIEW_BODY"
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-human"
 
-      - name: Post Review (APPROVE)
+      - name: Post review (approve - no CRITICAL)
         if: steps.review.outputs.has_critical == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review ${{ github.event.pull_request.number }} --approve --body "$REVIEW_BODY"
