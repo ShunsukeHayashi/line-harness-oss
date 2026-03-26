@@ -765,9 +765,9 @@ async function verifyDiscordState(
   try {
     const wrapper = JSON.parse(atob(stateParam)) as { d: string; s: string };
     const key = await importDiscordStateKey(secret);
-    const sigBytes = new Uint8Array(
-      wrapper.s.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-    );
+    const pairs = wrapper.s.match(/.{2}/g);
+    if (!pairs) return null;
+    const sigBytes = new Uint8Array(pairs.map((h) => parseInt(h, 16)));
     const valid = await crypto.subtle.verify(
       'HMAC',
       key,
@@ -815,30 +815,35 @@ async function verifyLineIdTokenForDiscord(
 }
 
 /**
- * GET /api/liff/discord/authorize
+ * POST /api/liff/discord/authorize
  *
  * Step 1 of the Discord OAuth link flow.
- * Verifies the caller's LINE ID token (server-side), then redirects to
- * Discord's OAuth consent page with an HMAC-signed state.
+ * Accepts the LINE ID token in the JSON **body** (never a query parameter —
+ * GET would leak the token into server logs, browser history, and Referer
+ * headers sent to Discord after the redirect).
  *
- * Query params:
- *   idToken — LINE ID token obtained from LIFF.getIDToken() (required)
+ * Returns the Discord OAuth authorize URL for the LIFF client to navigate to:
+ *   { success: true, data: { url: "https://discord.com/oauth2/authorize?..." } }
+ *
+ * Body (application/json):
+ *   idToken — LINE ID token from LIFF.getIDToken() (required)
  */
-liffRoutes.get('/api/liff/discord/authorize', async (c) => {
+liffRoutes.post('/api/liff/discord/authorize', async (c) => {
   const clientId = c.env.DISCORD_CLIENT_ID;
   if (!clientId) {
     return c.json({ success: false, error: 'Discord OAuth is not configured' }, 503);
   }
 
-  const idToken = c.req.query('idToken');
-  if (!idToken) {
+  let body: { idToken?: string } = {};
+  try { body = await c.req.json<{ idToken?: string }>(); } catch { /* invalid JSON */ }
+  if (!body.idToken) {
     return c.json({ success: false, error: 'idToken is required' }, 400);
   }
 
-  // lineUserId must come from the server-side-verified token — never from query params.
+  // lineUserId must come from the server-side-verified token — never from query/body params.
   const lineUserId = await verifyLineIdTokenForDiscord(
     c.env.DB,
-    idToken,
+    body.idToken,
     c.env.LINE_LOGIN_CHANNEL_ID,
   );
   if (!lineUserId) {
@@ -862,7 +867,8 @@ liffRoutes.get('/api/liff/discord/authorize', async (c) => {
   authUrl.searchParams.set('scope', 'identify');
   authUrl.searchParams.set('state', state);
 
-  return c.redirect(authUrl.toString());
+  // Return URL for LIFF client to navigate: window.location.href = data.url
+  return c.json({ success: true, data: { url: authUrl.toString() } });
 });
 
 /**
@@ -934,6 +940,12 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
       username: string;
       discriminator?: string;
     }>();
+
+    // Guard against unexpected API response shapes before touching the DB.
+    if (!discordUser.id || !discordUser.username) {
+      return c.html(errorPage('Failed to fetch Discord user info'));
+    }
+
     const discordId = discordUser.id;
     // discriminator '0' means the new username system (no #tag suffix).
     const discordUsername =
