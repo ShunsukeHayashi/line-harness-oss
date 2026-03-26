@@ -362,4 +362,181 @@ async function handleEvent(
   }
 }
 
+// ======== Teachable Webhook ========
+
+/**
+ * Teachable が送る X-Teachable-Signature ヘッダーを検証する。
+ *
+ * フォーマット 1 (v2, タイムスタンプ付き):
+ *   t=<unix_timestamp>,v1=<hmac_sha256_hex>
+ *   署名対象文字列: "<timestamp>.<rawBody>"
+ *   タイムスタンプが現在時刻から 5 分以上ずれている場合は拒否する。
+ *
+ * フォーマット 2 (レガシー):
+ *   <hmac_sha256_hex>
+ *   署名対象文字列: rawBody そのまま
+ *
+ * CF Workers では node:crypto が使えないため Web Crypto API (crypto.subtle) を使用。
+ */
+async function verifyTeachableSignature(
+  signatureHeader: string,
+  rawBody: string,
+  secret: string,
+): Promise<boolean> {
+  const enc = new TextEncoder();
+
+  // HMAC-SHA256 鍵をインポート
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+
+  // 16進数文字列 → ArrayBuffer
+  const hexToBuffer = (hex: string): ArrayBuffer => {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+    }
+    return bytes.buffer;
+  };
+
+  // v2 フォーマット: t=<ts>,v1=<hash>
+  const v2Match = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(signatureHeader);
+  if (v2Match) {
+    const timestamp = parseInt(v2Match[1], 10);
+    const receivedHash = v2Match[2];
+
+    // タイムスタンプが 5 分以上ずれている場合は拒否（リプレイ攻撃対策）
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (Math.abs(nowSeconds - timestamp) > 300) {
+      console.warn('Teachable webhook: timestamp out of 5-minute window');
+      return false;
+    }
+
+    const payload = `${timestamp}.${rawBody}`;
+    const expected = await crypto.subtle.sign('HMAC', key, enc.encode(payload));
+    const received = hexToBuffer(receivedHash);
+    return crypto.subtle.timingSafeEqual(expected, received);
+  }
+
+  // レガシーフォーマット: <hash> (64 桁の hex のみ)
+  const legacyMatch = /^([0-9a-f]{64})$/.exec(signatureHeader);
+  if (legacyMatch) {
+    const receivedHash = legacyMatch[1];
+    const expected = await crypto.subtle.sign('HMAC', key, enc.encode(rawBody));
+    const received = hexToBuffer(receivedHash);
+    return crypto.subtle.timingSafeEqual(expected, received);
+  }
+
+  // 両フォーマットにマッチしない場合は拒否
+  return false;
+}
+
+webhook.post('/api/webhooks/teachable', async (c) => {
+  // 1. X-Teachable-Signature ヘッダーで HMAC SHA256 を検証する。
+  //    Teachable は Authorization: Bearer ではなく X-Teachable-Signature を使う。
+  const webhookSecret = c.env.TEACHABLE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('TEACHABLE_WEBHOOK_SECRET is not configured');
+    return c.json({ error: 'Service unavailable' }, 503);
+  }
+  // 署名検証に rawBody が必要なので先にテキストとして読み取る
+  const rawBody = await c.req.text();
+  const signatureHeader = c.req.header('X-Teachable-Signature') ?? '';
+  if (!(await verifyTeachableSignature(signatureHeader, rawBody, webhookSecret))) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  // 2. Parse body（rawBody は署名検証で既に取得済み）
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody) as unknown;
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  // 3. Runtime type guards — avoid unsafe `as` assertions on untrusted input
+  if (typeof body !== 'object' || body === null) {
+    return c.json({ error: 'Invalid payload' }, 400);
+  }
+  const payload = body as Record<string, unknown>;
+
+  // Ignore non-sale.created events silently
+  if (payload['event'] !== 'sale.created') {
+    return c.json({ status: 'ignored' }, 200);
+  }
+
+  // 4. Email format validation — walk the object graph with type checks
+  const dataObj = payload['data'];
+  const saleObj =
+    typeof dataObj === 'object' && dataObj !== null
+      ? (dataObj as Record<string, unknown>)['object']
+      : undefined;
+  const rawEmail =
+    typeof saleObj === 'object' && saleObj !== null
+      ? (saleObj as Record<string, unknown>)['email']
+      : undefined;
+  if (typeof rawEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+    return c.json({ error: 'Invalid or missing email' }, 400);
+  }
+  // Lowercase to avoid case-mismatch against stored teachable_email values.
+  const email = rawEmail.toLowerCase();
+
+  const db = c.env.DB;
+  const now = jstNow();
+
+  // 5. Atomic idempotency — single conditional UPDATE eliminates the
+  //    TOCTOU race that existed in a separate SELECT + UPDATE pair.
+  //    If line_message_sent_at is already set, or no row matches the email,
+  //    RETURNING returns no rows → claimed is null → safe 200 early-exit.
+  const claimed = await db
+    .prepare(
+      `UPDATE unified_profiles
+          SET line_message_sent_at = ?,
+              updated_at            = ?
+        WHERE teachable_email = ?
+          AND line_message_sent_at IS NULL
+          AND line_uid IS NOT NULL
+        RETURNING line_uid`,
+    )
+    .bind(now, now, email)
+    .first<{ line_uid: string }>();
+
+  if (!claimed) {
+    // Either no linked LINE user or message already dispatched — safe to 200.
+    return c.json({ status: 'already_sent_or_no_user' }, 200);
+  }
+
+  const lineUserId = claimed.line_uid;
+
+  // 6. Send LINE push message after the idempotency record is committed
+  try {
+    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    await lineClient.pushMessage(lineUserId, [
+      buildMessage('text', 'ご購入ありがとうございます！\nコースへのアクセス権が付与されました。引き続きよろしくお願いします。'),
+    ]);
+  } catch (err) {
+    console.error('Teachable webhook: pushMessage failed for', lineUserId, err);
+    // Roll back the idempotency flag so the next Teachable retry can re-attempt
+    // delivery. Without this rollback the user would silently never receive their
+    // purchase confirmation on a transient push failure.
+    await db
+      .prepare(
+        `UPDATE unified_profiles
+            SET line_message_sent_at = NULL,
+                updated_at            = ?
+          WHERE teachable_email = ?`,
+      )
+      .bind(now, email)
+      .run();
+    // Return 502 so Teachable knows delivery failed and schedules a retry.
+    return c.json({ error: 'Delivery failed' }, 502);
+  }
+
+  return c.json({ status: 'ok' }, 200);
+});
+
 export { webhook };
