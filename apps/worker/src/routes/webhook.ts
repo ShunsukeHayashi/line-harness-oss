@@ -522,15 +522,22 @@ webhook.post('/api/webhooks/teachable', async (c) => {
     // Roll back the idempotency flag so the next Teachable retry can re-attempt
     // delivery. Without this rollback the user would silently never receive their
     // purchase confirmation on a transient push failure.
-    await db
-      .prepare(
-        `UPDATE unified_profiles
-            SET line_message_sent_at = NULL,
-                updated_at            = ?
-          WHERE teachable_email = ?`,
-      )
-      .bind(now, email)
-      .run();
+    try {
+      await db
+        .prepare(
+          `UPDATE unified_profiles
+              SET line_message_sent_at = NULL,
+                  updated_at            = ?
+            WHERE teachable_email = ?
+              AND line_uid = ?`,
+        )
+        .bind(now, email, lineUserId)
+        .run();
+    } catch (rollbackErr) {
+      // ロールバック失敗 = line_message_sent_at が SET のまま残る。
+      // Teachable のリトライは already_sent_or_no_user を返すため手動介入が必要。
+      console.error('Teachable webhook: ROLLBACK FAILED — manual fix required for', email, rollbackErr);
+    }
     // Return 502 so Teachable knows delivery failed and schedules a retry.
     return c.json({ error: 'Delivery failed' }, 502);
   }
