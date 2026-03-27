@@ -38,7 +38,7 @@ jobs:
             const combined = title + '\n' + body;
 
             // Check for file paths (extensions)
-            const codeFilePattern = /\.(ts|js|py|sh|sql|yml|yaml|json|go|rb|java|cpp|c|rs)\b/i;
+            const codeFilePattern = /\.(ts|tsx|js|jsx|py|sh|sql|yml|yaml|json|go|rb|java|cpp|c|rs)\b/i;
             const hasFilePath = codeFilePattern.test(combined);
 
             // Check for DB/auth keywords
