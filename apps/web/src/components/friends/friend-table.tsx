@@ -133,8 +133,8 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                         <p className="text-sm font-medium text-gray-900">
                           {friend.displayName}
                           {(() => {
-                            const tags = (friend as Record<string, unknown>).tags
-                            const meta = (friend as Record<string, unknown>).metadata
+                            const tags = (friend as unknown as Record<string, unknown>).tags
+                            const meta = (friend as unknown as Record<string, unknown>).metadata
                             const hasPpal =
                               (Array.isArray(tags) && tags.some((t: unknown) => typeof t === 'string' && /ppal/i.test(t))) ||
                               (typeof meta === 'string' && /ppal/i.test(meta)) ||
@@ -183,7 +183,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   {/* Score */}
                   <td className="px-4 py-3 hidden sm:table-cell">
                     {(() => {
-                      const score = (friend as Record<string, unknown>).score ?? (friend as Record<string, unknown>).totalScore
+                      const score = (friend as unknown as Record<string, unknown>).score ?? (friend as unknown as Record<string, unknown>).totalScore
                       if (score == null) return <span className="text-gray-400">-</span>
                       const numScore = Number(score)
                       if (numScore >= 80) return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">HIGH</span>
