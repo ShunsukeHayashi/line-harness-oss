@@ -158,22 +158,30 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const review = fs.readFileSync('/tmp/review_output.txt', 'utf8');
+            let review = fs.readFileSync('/tmp/review_output.txt', 'utf8');
             const verdict = '${{ steps.review.outputs.verdict }}';
             const usedKey = '${{ steps.review.outputs.used_key }}';
-            const truncated = process.env.truncated === 'true';
+            const diffTruncated = process.env.truncated === 'true';
             const pr = context.payload.pull_request;
 
             const event = verdict === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
 
-            const body = [
-              '## AI Code Review -- Claude Opus 4.6 (via Claude Code CLI)',
-              '',
-              review,
-              '',
-              '---',
-              `_Model: claude-opus-4-6 | Diff: ${truncated ? 'truncated' : 'full'} | PR: #${pr.number} | Token: #${usedKey}_`,
-            ].join('\n');
+            const HEADER = '## AI Code Review -- Claude Opus 4.6 (via Claude Code CLI)\n\n';
+            const FOOTER = '\n\n---\n' +
+              `_Model: claude-opus-4-6 | Diff: ${diffTruncated ? 'truncated' : 'full'} | PR: #${pr.number} | Token: #${usedKey}_`;
+
+            // GitHub Reviews body limit: 65535 chars
+            const MAX_BODY = 65000;
+            const MAX_REVIEW = MAX_BODY - HEADER.length - FOOTER.length;
+
+            let reviewTruncated = false;
+            if (review.length > MAX_REVIEW) {
+              review = review.slice(0, MAX_REVIEW - 40) + '\n\n...[review truncated due to GitHub API limit]';
+              reviewTruncated = true;
+              console.log(`Review truncated: original=${review.length} chars, limit=${MAX_REVIEW}`);
+            }
+
+            const body = HEADER + review + FOOTER;
 
             await github.rest.pulls.createReview({
               owner:       context.repo.owner,
@@ -183,7 +191,7 @@ jobs:
               body,
             });
 
-            console.log(`Posted ${event} review for PR #${pr.number} (token #${usedKey})`);
+            console.log(`Posted ${event} review for PR #${pr.number} (token #${usedKey}, review_truncated=${reviewTruncated})`);
 
             if (event === 'REQUEST_CHANGES') {
               core.setFailed('AI review requested changes. Fix the issues before merging.');
