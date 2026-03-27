@@ -40,7 +40,9 @@ jobs:
           NEXT_PUBLIC_STRIPE_BUSINESS_PRICE_ID: ${{ secrets.NEXT_PUBLIC_STRIPE_BUSINESS_PRICE_ID }}
 
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler pages deploy apps/web/out --project-name=miyabi-line-admin --commit-dirty=true
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/web
+          command: pages deploy out --project-name=miyabi-line-admin --commit-dirty=true
