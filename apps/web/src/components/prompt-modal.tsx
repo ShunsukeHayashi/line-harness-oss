@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
+const API_URL = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
 // AIエンドポイント: ローカルAIサーバー（Claude Codeサブスク）優先、未設定ならWorker
 const AI_URL = process.env.NEXT_PUBLIC_AI_URL || 'http://localhost:4747'
 // API_KEYはlocalStorageから動的に読む（ビルド時に固定しない）

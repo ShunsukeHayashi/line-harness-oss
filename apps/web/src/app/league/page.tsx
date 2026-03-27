@@ -556,7 +556,7 @@ export default function LeagueDashboard() {
   const fetchRankings = useCallback(async () => {
     setIsLoading(true);
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
       const res = await fetch(`${baseUrl}/api/league/rankings`, { cache: 'no-store' });
       const data = await res.json() as { rankings: AgentScore[]; total_agents: number; week: string; updated_at: string };
       if (data.rankings?.length) {

@@ -6,7 +6,7 @@ import Header from '@/components/layout/header'
 import { fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 
-const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
+const WORKER_BASE = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
 
 interface RefRoute {
   refCode: string
