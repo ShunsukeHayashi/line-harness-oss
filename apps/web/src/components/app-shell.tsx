@@ -7,7 +7,13 @@ import { AccountProvider } from '@/contexts/account-context'
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
 
-  if (pathname === '/login' || pathname === '/landing') {
+  if (
+    pathname === '/login' ||
+    pathname === '/landing' ||
+    pathname === '/privacy' ||
+    pathname === '/terms' ||
+    pathname === '/tokutei'
+  ) {
     return <>{children}</>
   }
 
