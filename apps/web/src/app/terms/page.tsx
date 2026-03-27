@@ -59,7 +59,7 @@ export default function TermsPage() {
             <ol className="list-decimal list-inside space-y-2 text-sm">
               <li>月額サブスクリプションを初めてご契約された場合、契約月の返金を申請できます（初月返金保証）。</li>
               <li>初月以降の返金は原則として対応しません。ただし、サービスの重大な障害等により当社の帰責事由がある場合はこの限りではありません。</li>
-              <li>返金を希望される場合は support@ambitiousai.co.jp までご連絡ください。</li>
+              <li>返金を希望される場合は support@miyabi-ai.jp までご連絡ください。</li>
               <li>解約後の日割り返金は行いません。解約はいつでも可能で、次の更新日まで利用できます。</li>
             </ol>
           </section>

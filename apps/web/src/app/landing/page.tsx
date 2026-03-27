@@ -310,7 +310,7 @@ export default function LandingPage() {
             <Link href="/privacy" className="hover:text-white transition">プライバシーポリシー</Link>
             <Link href="/terms" className="hover:text-white transition">利用規約</Link>
             <Link href="/tokutei" className="hover:text-white transition">特定商取引法に基づく表記</Link>
-            <a href="mailto:support@ambitiousai.co.jp" className="hover:text-white transition">お問い合わせ</a>
+            <a href="mailto:support@miyabi-ai.jp" className="hover:text-white transition">お問い合わせ</a>
           </div>
         </div>
       </footer>

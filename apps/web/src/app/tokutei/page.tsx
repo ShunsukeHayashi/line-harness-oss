@@ -26,8 +26,8 @@ export default function TokuteiPage() {
                 ['販売事業者', '合同会社みやび'],
                 ['代表者', '林 駿甫'],
                 ['所在地', '愛知県一宮市（詳細住所はご請求により開示します）'],
-                ['電話番号', 'メールにてご対応します（support@ambitiousai.co.jp）'],
-                ['メールアドレス', 'support@ambitiousai.co.jp'],
+                ['電話番号', 'メールにてご対応します（support@miyabi-ai.jp）'],
+                ['メールアドレス', 'support@miyabi-ai.jp'],
                 ['サービス名', 'みやびライン（LINE Harness OSS SaaS版）'],
                 ['販売価格', [
                   '• Free プラン: 無料',
@@ -41,7 +41,7 @@ export default function TokuteiPage() {
                 ['返金ポリシー', [
                   '• 初月返金保証あり（有料プラン初回契約月に限り全額返金）',
                   '• 初月以降の返金は原則対応しません',
-                  '• 返金申請: support@ambitiousai.co.jp',
+                  '• 返金申請: support@miyabi-ai.jp',
                 ]],
                 ['動作環境', 'モダンブラウザ（Chrome / Firefox / Safari / Edge 最新版）'],
                 ['必要なもの', 'LINE Developers アカウント・LINE 公式アカウント'],
@@ -74,7 +74,7 @@ export default function TokuteiPage() {
 
         <p className="mt-8 text-xs text-gray-500">
           本表記は特定商取引に関する法律（特商法）第11条および第12条の規定に基づくものです。
-          ご不明な点は support@ambitiousai.co.jp までお問い合わせください。
+          ご不明な点は support@miyabi-ai.jp までお問い合わせください。
         </p>
       </main>
 
