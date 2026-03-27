@@ -31,7 +31,7 @@ export default function PrivacyPage() {
               <li><span className="font-medium">事業者名:</span> 合同会社みやび</li>
               <li><span className="font-medium">代表社員:</span> 林 駿甫</li>
               <li><span className="font-medium">所在地:</span> 愛知県一宮市（詳細は特定商取引法表記参照）</li>
-              <li><span className="font-medium">お問い合わせ:</span> support@ambitiousai.co.jp</li>
+              <li><span className="font-medium">お問い合わせ:</span> support@miyabi-ai.jp</li>
             </ul>
           </section>
 
@@ -100,7 +100,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">7. お客様の権利</h2>
             <p className="text-sm">
-              お客様は以下の権利を有します。support@ambitiousai.co.jp へご連絡ください。
+              お客様は以下の権利を有します。support@miyabi-ai.jp へご連絡ください。
             </p>
             <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
               <li>個人情報の開示請求</li>
@@ -131,7 +131,7 @@ export default function PrivacyPage() {
             <p className="text-sm">
               個人情報の取り扱いに関するお問い合わせは以下までご連絡ください。
             </p>
-            <p className="mt-2 text-sm font-medium">support@ambitiousai.co.jp</p>
+            <p className="mt-2 text-sm font-medium">support@miyabi-ai.jp</p>
           </section>
 
         </div>

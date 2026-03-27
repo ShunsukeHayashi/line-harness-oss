@@ -153,7 +153,7 @@ export default function SubscriptionPage() {
             >
               プランを変更・解約
             </a>
-            <p className="text-xs text-gray-400 mt-1">Stripe カスタマーポータルで管理・解約できます。ご不明な点は support@ambitiousai.co.jp までお問い合わせください。</p>
+            <p className="text-xs text-gray-400 mt-1">Stripe カスタマーポータルで管理・解約できます。ご不明な点は support@miyabi-ai.jp までお問い合わせください。</p>
           </div>
         </div>
 
@@ -225,8 +225,8 @@ export default function SubscriptionPage() {
           お支払いは Stripe によって安全に処理されます。いつでもキャンセル可能です。
           <br />
           ご不明な点は{' '}
-          <a href="mailto:support@miyabi-line.com" className="text-green-600 hover:underline">
-            support@miyabi-line.com
+          <a href="mailto:support@miyabi-ai.jp" className="text-green-600 hover:underline">
+            support@miyabi-ai.jp
           </a>{' '}
           までお問い合わせください。
         </p>
