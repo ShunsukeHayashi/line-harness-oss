@@ -16,6 +16,7 @@ import {
 } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
+import { grantDiscordRole, hasRole } from '../services/discord-role.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -572,6 +573,25 @@ webhook.post('/api/webhooks/teachable', async (c) => {
       .bind(email, lineUserId)
       .run();
     return c.json({ error: 'Delivery failed' }, 502);
+  }
+
+  // Phase 4b (Option C 前半): 購入時点で Discord 連携済みならロールを即時付与
+  const botToken = c.env.DISCORD_BOT_TOKEN;
+  const guildId = c.env.DISCORD_GUILD_ID;
+  const memberRoleId = c.env.DISCORD_MEMBER_ROLE_ID;
+  if (botToken && guildId && memberRoleId) {
+    const profile = await db
+      .prepare(
+        `SELECT discord_id, discord_roles FROM unified_profiles WHERE line_uid = ? LIMIT 1`,
+      )
+      .bind(lineUserId)
+      .first<{ discord_id: string | null; discord_roles: string | null }>();
+
+    if (profile?.discord_id && !hasRole(profile.discord_roles, memberRoleId)) {
+      c.executionCtx.waitUntil(
+        grantDiscordRole(botToken, guildId, profile.discord_id, memberRoleId, lineUserId, db),
+      );
+    }
   }
 
   return c.json({ status: 'ok' }, 200);

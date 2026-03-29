@@ -13,6 +13,7 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { grantDiscordRole, hasRole } from '../services/discord-role.js';
 
 const liffRoutes = new Hono<Env>();
 
@@ -997,6 +998,27 @@ liffRoutes.get('/api/liff/discord/callback', async (c) => {
     )
       .bind(lineUserId, discordId, discordUsername, now, now, now)
       .run();
+
+    // Phase 4b: Teachable購入済みの場合、Discordロールを即座に付与する
+    const botToken = c.env.DISCORD_BOT_TOKEN;
+    const guildId = c.env.DISCORD_GUILD_ID;
+    const memberRoleId = c.env.DISCORD_MEMBER_ROLE_ID;
+    if (botToken && guildId && memberRoleId) {
+      // teachable_email が記録済み = Teachable購入確認済み
+      const profile = await c.env.DB
+        .prepare(
+          `SELECT teachable_email, discord_roles FROM unified_profiles WHERE line_uid = ? LIMIT 1`,
+        )
+        .bind(lineUserId)
+        .first<{ teachable_email: string | null; discord_roles: string | null }>();
+
+      if (profile?.teachable_email && !hasRole(profile.discord_roles, memberRoleId)) {
+        // waitUntil: ロール付与はレスポンスを遅延させない
+        c.executionCtx.waitUntil(
+          grantDiscordRole(botToken, guildId, discordId, memberRoleId, lineUserId, c.env.DB),
+        );
+      }
+    }
 
     // Redirect to LIFF deep-link if configured, otherwise show completion page.
     const liffLinkUrl = c.env.LIFF_LINK_URL;

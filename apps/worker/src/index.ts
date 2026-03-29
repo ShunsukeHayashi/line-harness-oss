@@ -56,6 +56,9 @@ export type Env = {
     TELEGRAM_CHAT_ID?: string;
     DISCORD_CLIENT_ID?: string;
     DISCORD_CLIENT_SECRET?: string;   // secret — use `wrangler secret put`
+    DISCORD_BOT_TOKEN?: string;       // secret — use `wrangler secret put` (Phase 4b)
+    DISCORD_GUILD_ID?: string;        // Discord サーバーID (Phase 4b)
+    DISCORD_MEMBER_ROLE_ID?: string;  // PPALメンバーロールID (Phase 4b)
     LIFF_LINK_URL?: string;
     TEACHABLE_WEBHOOK_SECRET?: string; // secret — use `wrangler secret put`
     ANTHROPIC_API_KEY?: string;        // secret — use `wrangler secret put`
